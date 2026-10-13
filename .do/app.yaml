@@ -1,0 +1,98 @@
+# DigitalOcean App Platform spec — MDA youth platform (NOT deployed yet; see docs/DEPLOYMENT.md).
+# One app, one origin: the static frontend at "/" and the API at "/api", so the HttpOnly session
+# cookie and the CSRF double-submit cookie stay first-party (no CORS).
+#
+# Cost-relevant choices are marked [cost]. Nothing here contains secrets: the database URL is
+# injected by App Platform from the attached managed cluster.
+name: mda-youth-platform
+region: fra                      # Frankfurt: closest App Platform region to Israel
+
+# Shared by the API, the worker and the migration job.
+envs:
+  - key: MDA_DATABASE_URL
+    scope: RUN_AND_BUILD_TIME
+    value: ${db.DATABASE_URL}    # postgresql://…?sslmode=require; the app adds the psycopg driver
+  - key: MDA_TIMEZONE
+    value: Asia/Jerusalem
+  - key: MDA_PUSH_CHANNEL
+    value: none                  # no phone provider yet: messages stay "simulated", never "delivered"
+
+databases:
+  # Managed PostgreSQL 16 cluster, created separately BEFORE the app (App Platform attaches
+  # existing production clusters by name; it does not create them).
+  - name: db
+    engine: PG
+    version: "16"
+    production: true
+    cluster_name: mda-youth-db   # [cost] db-s-1vcpu-1gb, 1 node, fra1 — see docs/DEPLOYMENT.md
+    db_name: mda
+    db_user: mda
+
+services:
+  - name: api
+    github:
+      repo: adikoren/mda-youth-platform
+      branch: main
+      deploy_on_push: false      # deploy manually; no surprise releases
+    source_dir: backend
+    environment_slug: python     # buildpack installs backend/requirements.txt (Python from .python-version)
+    run_command: >-
+      uvicorn app.main:app --host 0.0.0.0 --port 8080
+      --proxy-headers --forwarded-allow-ips='*'
+    http_port: 8080
+    instance_size_slug: apps-s-1vcpu-1gb-fixed   # [cost] $10/month; 1 GiB for argon2 hashing headroom
+    instance_count: 1            # single instance: login rate limit is in-process (DECISIONS D-09)
+    health_check:
+      http_path: /api/health
+    envs:
+      - key: MDA_COOKIE_SECURE
+        value: "true"            # required behind HTTPS
+
+workers:
+  - name: worker
+    github:
+      repo: adikoren/mda-youth-platform
+      branch: main
+      deploy_on_push: false
+    source_dir: backend
+    environment_slug: python
+    run_command: python -m app.notifications.worker   # reminders + outbox, every 30 s
+    instance_size_slug: apps-s-1vcpu-0.5gb   # [cost] $5/month
+    instance_count: 1
+
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY             # runs before each deployment; a failed migration stops the release
+    github:
+      repo: adikoren/mda-youth-platform
+      branch: main
+      deploy_on_push: false
+    source_dir: backend
+    environment_slug: python
+    run_command: alembic upgrade head
+    instance_size_slug: apps-s-1vcpu-0.5gb   # billed only while it runs (seconds)
+
+static_sites:
+  - name: web
+    github:
+      repo: adikoren/mda-youth-platform
+      branch: main
+      deploy_on_push: false
+    source_dir: frontend
+    build_command: npm ci && npm run build
+    output_dir: dist
+    catchall_document: index.html  # client-side routes (/journal, /mentor, …)
+
+ingress:
+  rules:
+    - match:
+        path:
+          prefix: /api
+      component:
+        name: api
+        preserve_path_prefix: true   # the API's routes already start with /api
+    - match:
+        path:
+          prefix: /
+      component:
+        name: web

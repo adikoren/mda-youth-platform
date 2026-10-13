@@ -6,6 +6,8 @@
 
 Hebrew-only, RTL, mobile-first web app. FastAPI + synchronous SQLAlchemy 2 + PostgreSQL + Alembic, React/TypeScript (Vite), with a PostgreSQL outbox and a Python worker. Modular monolith.
 
+**Deployment:** prepared for DigitalOcean App Platform but not deployed — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) and [`.do/app.yaml`](.do/app.yaml).
+
 **Read first:** [`DESIGN_REVIEW.md`](DESIGN_REVIEW.md) (approved design, 2026-10-12), [`CLAUDE_START.md`](CLAUDE_START.md) and [`docs/DECISIONS.md`](docs/DECISIONS.md) (implementation decisions). The older handoff files (`PRODUCT_REQUIREMENTS.md`, `ARCHITECTURE.md`, …) remain for background; the revised design wins where they conflict.
 
 ## Layout
@@ -72,7 +74,7 @@ cd frontend && npm run build  # type-check + production build
 cd frontend && npm test       # conflict-merge unit tests (Node 23+ built-in runner)
 ```
 
-89 backend tests run against real PostgreSQL, grouped by area:
+90 backend tests run against real PostgreSQL, grouped by area:
 
 - **Calendar and time:** the seven registration calendars, and the 24–25 Oct DST night.
 - **Accounts and access:** sessions, CSRF, rate limiting, pending/admin/youth-manager/day-manager scopes.
