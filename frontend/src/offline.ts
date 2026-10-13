@@ -15,7 +15,8 @@ import { api, ApiError, isUnreachable } from "./api";
 import { GROUPS, fromFields, threeWayMerge, toFields, type Values } from "./merge";
 
 export type DraftKind = "ride" | "description" | "assessment" | "summary";
-export type DraftState = "pending" | "denied" | "conflict";
+// "local": a ride the person started ("+ נסיעה") but has not saved yet. Never synced or counted.
+export type DraftState = "local" | "pending" | "denied" | "conflict";
 type PartKind = Exclude<DraftKind, "ride">;
 
 export interface Draft {
@@ -46,14 +47,24 @@ export interface Snapshot<T = unknown> {
 
 const DRAFTS = "drafts";
 const SNAPSHOTS = "snapshots";
+const EDITS = "edits";
+
+/** Text and choices typed but not saved yet (D-50). Kept on the device while typing; never sent to
+ * the server until the person presses Save, which turns the edit into a pending draft. */
+export interface Edit {
+  key: string; // the draft key this edit belongs to (keys.description / assessment / summary)
+  payload: Record<string, unknown>;
+  updated_at: number;
+}
 
 function openDb(userId: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(`mda-journal-${userId}`, 2);
+    const req = indexedDB.open(`mda-journal-${userId}`, 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(DRAFTS)) db.createObjectStore(DRAFTS, { keyPath: "key" });
       if (!db.objectStoreNames.contains(SNAPSHOTS)) db.createObjectStore(SNAPSHOTS, { keyPath: "key" });
+      if (!db.objectStoreNames.contains(EDITS)) db.createObjectStore(EDITS, { keyPath: "key" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -75,6 +86,12 @@ export const drafts = {
   get: (userId: string, key: string) => tx<Draft | undefined>(userId, DRAFTS, "readonly", (s) => s.get(key) as IDBRequest<Draft | undefined>),
   put: (userId: string, d: Draft) => tx(userId, DRAFTS, "readwrite", (s) => s.put(d)),
   remove: (userId: string, key: string) => tx(userId, DRAFTS, "readwrite", (s) => s.delete(key)),
+};
+
+export const edits = {
+  all: (userId: string) => tx<Edit[]>(userId, EDITS, "readonly", (s) => s.getAll() as IDBRequest<Edit[]>),
+  put: (userId: string, e: Edit) => tx(userId, EDITS, "readwrite", (s) => s.put(e)),
+  remove: (userId: string, key: string) => tx(userId, EDITS, "readwrite", (s) => s.delete(key)),
 };
 
 const MAX_SELF_COPY_MS = 30 * 24 * 3600 * 1000; // same as the session inactivity limit
@@ -217,7 +234,9 @@ async function doSync(userId: string, retryDenied: boolean, round = 0): Promise<
     }
   }
   const list = all.filter((d) => d.state === "pending").sort((a, b) => ORDER[a.kind] - ORDER[b.kind]);
-  const unsyncedRides = new Set(list.filter((d) => d.kind === "ride").map((d) => d.ride_id));
+  // Parts of a ride wait until the ride itself reached the server (pending, or still only local).
+  const unsyncedRides = new Set(all.filter((d) => d.kind === "ride" && (d.state === "pending" || d.state === "local"))
+    .map((d) => d.ride_id));
   const result: SyncResult = { done: 0, confirmed: [], needsLogin: false, offline: false };
   let rebased = false;
   for (const d of list) {

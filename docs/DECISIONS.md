@@ -139,7 +139,19 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
     - "טיוטה במכשיר — ממתינה לסנכרון" when it is kept locally (offline or server unreachable).
     - "✓ נשמר במערכת" only after the server confirmed that exact draft (the key is returned by `syncDrafts`).
     - A red "השמירה במערכת נכשלה — הטיוטה נשמרה במכשיר" with the server's reason when it is refused.
-  - **Limit:** text typed but not saved is not kept. This is a known gap.
+  - **Limit:** text typed but not saved used to be lost. D-50 fixed this the next day.
+
+- **D-50 Local typing drafts** (2026-10-13).
+  - **Local only:** what is typed or selected (descriptions, markers and case summaries, shift summaries) is written to a separate IndexedDB store, `edits` (DB version 3), 400 ms after typing stops. It is never sent automatically.
+  - **Explicit Save:** pressing Save is still the only way to queue a change for the server. Save cancels any pending local write first.
+  - **States:** "שינויים שלא נשמרו — שמורים במכשיר בלבד" (typed, not saved; with "ביטול השינויים") → "טיוטה במכשיר — ממתינה לסנכרון" (saved, queued) → "שומר…" → "✓ נשמר במערכת" (server confirmed).
+  - **"+ נסיעה"** creates only a local ride (state `local`): "נסיעה חדשה במכשיר — עוד לא נשמרה ולא נספרת", with "מחיקת הטיוטה". The ride is queued only when content is saved; Save is disabled while the local ride has no content.
+  - **Persistence:** local edits survive refresh, closing the tab and reopening offline.
+- **D-51 What counts as a ride** (Adi's decision, 2026-10-13).
+  - **Counts:** a ride counts once it has content: a case description, or at least one selected marker, or a per-case summary. Full documentation is not required.
+  - **Empty records:** these never count toward progress, completeness or reminders, and the journal labels them "רשומה ריקה — לא נספרת".
+  - **Clearing content** makes a ride stop counting again.
+  - **Retroactive:** applied to existing data. The local test data had one empty mentor-created record, which no longer counts.
 
 ## Not built yet
 

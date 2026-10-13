@@ -4,8 +4,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
+from sqlalchemy import cast as sa_cast
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
@@ -69,6 +70,21 @@ def _touch_contributor(db: Session, ride_id: uuid.UUID, user_id: uuid.UUID, now:
 
 # ---------------- progress ----------------
 
+def _ride_has_content():
+    """A ride counts only once it holds content: a case description, or at least one selected
+    marker or a per-case summary (decision 2026-10-13). Creating a ride ("+ נסיעה") never counts by
+    itself, and full documentation is NOT required for counting."""
+    has_assessment = select(RideAssessment.ride_id).where(
+        RideAssessment.ride_id == Ride.id,
+        (RideAssessment.markers != sa_cast({}, JSONB)) | RideAssessment.summary.is_not(None)).exists()
+    return Ride.description.is_not(None) | has_assessment
+
+
+def ride_counts(ride: Ride, assessment: RideAssessment | None) -> bool:
+    return ride.cancelled_at is None and (bool(ride.description) or (
+        assessment is not None and (bool(assessment.markers) or bool(assessment.summary))))
+
+
 def progress_for(db: Session, trainee_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
     """Ride count and last ride date, derived from server-confirmed rides plus audited corrections.
     count = rides + sum(count_delta). If a correction sets last_ride_date, the latest such
@@ -77,7 +93,8 @@ def progress_for(db: Session, trainee_ids: list[uuid.UUID]) -> dict[uuid.UUID, d
     if not trainee_ids:
         return out
     rides = db.execute(select(Ride.trainee_id, Ride.occurred_on, Ride.created_at)
-                       .where(Ride.trainee_id.in_(trainee_ids), Ride.cancelled_at.is_(None))).all()
+                       .where(Ride.trainee_id.in_(trainee_ids), Ride.cancelled_at.is_(None),
+                              _ride_has_content())).all()
     corrections = db.execute(select(ProgressCorrection).where(ProgressCorrection.trainee_id.in_(trainee_ids))
                              .order_by(ProgressCorrection.created_at)).scalars().all()
     by_t: dict[uuid.UUID, list] = {}
@@ -375,7 +392,7 @@ def completeness(db: Session, trainee_id: uuid.UUID, shift: Shift) -> Completene
     mentoring is not implemented yet), no mentor part is required."""
     mentor_required = bool(formal_mentors(db, trainee_id, shift.id))
     rides = list(db.scalars(select(Ride).where(Ride.trainee_id == trainee_id, Ride.shift_id == shift.id,
-                                               Ride.cancelled_at.is_(None))))
+                                               Ride.cancelled_at.is_(None), _ride_has_content())))
     assessments = {a.ride_id: a for a in db.scalars(select(RideAssessment).where(
         RideAssessment.ride_id.in_([r.id for r in rides])))} if rides else {}
     summary = db.scalar(select(MentoringSummary).where(MentoringSummary.trainee_id == trainee_id,
@@ -434,6 +451,7 @@ def journal_view(db: Session, actor: Actor, trainee_id: uuid.UUID, now: datetime
         "assessment": _assessment_out(assessments.get(r.id)),
         "assessment_complete": assessment_complete(assessments.get(r.id)),
         "contributors": sorted(contributors.get(r.id, [])),
+        "counted": ride_counts(r, assessments.get(r.id)),  # empty records never count
         "can_assess": acc.can_mentor_shift(r.shift_id) and r.cancelled_at is None,
         "can_edit_description": acc.can_edit_description and r.cancelled_at is None,
         "cancelled": None if r.cancelled_at is None else {

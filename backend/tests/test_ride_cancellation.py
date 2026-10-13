@@ -75,6 +75,7 @@ def test_cancelled_ride_does_not_count_as_missing_documentation(world, clock, ev
     clock.set(at(THU, "17:00"))
     mentor = Client("thu.mentor@x.test")
     rid, _ = new_ride(mentor, world, shift_id=evening)  # created by mentor: awaiting description
+    mentor.put(f"/api/journal/rides/{rid}/assessment", {"markers": {"pulse": "success"}, "expected_version": 0})
     comp = next(s for s in journal(mentor, world)["shifts"] if s["shift_id"] == evening)["completeness"]
     assert comp["trainee_missing"] == 1 and comp["mentor_missing_rides"] == 1
     Client("thu.mgr@x.test").post(f"/api/journal/rides/{rid}/cancel", {"reason": "נפתחה בטעות"})
