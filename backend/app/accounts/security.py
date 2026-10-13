@@ -9,7 +9,14 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from app.core.config import get_settings
 
-_hasher = PasswordHasher()  # argon2id with library defaults
+_hasher = PasswordHasher()  # argon2id with library defaults (64 MiB, 3 passes, 4 lanes)
+
+# Each hash/verify allocates 64 MiB for a fraction of a second. Without a bound, N simultaneous
+# logins need N x 64 MiB (measured: 10 at once took the API from ~160 to ~730 MiB). The bound keeps
+# memory flat; extra logins wait their turn. On a 1-vCPU container hashing is CPU-bound, so more
+# parallelism would not make logins faster anyway. (DECISIONS D-52)
+_hash_slots = threading.BoundedSemaphore(get_settings().password_hash_concurrency)
+
 # Pre-computed so unknown emails cost the same as wrong passwords (no user enumeration by timing).
 _DUMMY_HASH = _hasher.hash("timing-equaliser-not-a-password")
 
@@ -17,12 +24,14 @@ MIN_PASSWORD_LENGTH = 10
 
 
 def hash_password(password: str) -> str:
-    return _hasher.hash(password)
+    with _hash_slots:
+        return _hasher.hash(password)
 
 
 def verify_password(password_hash: str | None, password: str) -> bool:
     try:
-        return _hasher.verify(password_hash or _DUMMY_HASH, password) and password_hash is not None
+        with _hash_slots:
+            return _hasher.verify(password_hash or _DUMMY_HASH, password) and password_hash is not None
     except (VerifyMismatchError, InvalidHashError):
         return False
 

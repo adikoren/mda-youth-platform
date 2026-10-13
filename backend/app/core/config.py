@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # Login rate limit (per process, per email+IP).
     login_max_failures: int = 8
     login_window_minutes: int = 15
+    # Simultaneous argon2 hash/verify operations (64 MiB each). Bounds API memory (D-52).
+    password_hash_concurrency: int = 2
 
     # Reminders. (The "registration closing soon" reminder was removed by decision 2026-10-12.)
     draft_idle_minutes: int = 10

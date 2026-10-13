@@ -153,6 +153,11 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Clearing content** makes a ride stop counting again.
   - **Retroactive:** applied to existing data. The local test data had one empty mentor-created record, which no longer counts.
 
+- **D-52 Bounded password hashing** (2026-10-13). argon2id keeps its library defaults (64 MiB, t=3, p=4), but at most `MDA_PASSWORD_HASH_CONCURRENCY` (default 2) hash or verify operations run at once; the rest queue.
+  - **Before:** unbounded, 10 simultaneous logins took the API from about 160 MiB to 733 MiB, and 40 took it to 808 MiB.
+  - **After:** the peak is 237 MiB, which makes the $5 (512 MiB) App Platform plan safe. Details in docs/DEPLOYMENT.md.
+  - Throughput is unchanged on a 1-vCPU container, because hashing there is CPU-bound.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

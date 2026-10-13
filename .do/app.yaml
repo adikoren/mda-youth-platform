@@ -16,6 +16,8 @@ envs:
     value: Asia/Jerusalem
   - key: MDA_PUSH_CHANNEL
     value: none                  # no phone provider yet: messages stay "simulated", never "delivered"
+  - key: MALLOC_ARENA_MAX
+    value: "2"                   # glibc: limit per-thread malloc arenas (thread pool) in small containers
 
 databases:
   # Managed PostgreSQL 16 cluster, created separately BEFORE the app (App Platform attaches
@@ -40,13 +42,16 @@ services:
       uvicorn app.main:app --host 0.0.0.0 --port 8080
       --proxy-headers --forwarded-allow-ips='*'
     http_port: 8080
-    instance_size_slug: apps-s-1vcpu-1gb-fixed   # [cost] $10/month; 1 GiB for argon2 hashing headroom
-    instance_count: 1            # single instance: login rate limit is in-process (DECISIONS D-09)
+    instance_size_slug: apps-s-1vcpu-0.5gb   # [cost] $5/month; measured peak 237 MiB (docs/DEPLOYMENT.md)
+    instance_count: 1            # single instance: login rate limit is in-process (DECISIONS D-09);
+                                 # this plan cannot scale out — moving up a plan is a spec change
     health_check:
       http_path: /api/health
     envs:
       - key: MDA_COOKIE_SECURE
         value: "true"            # required behind HTTPS
+      - key: MDA_PASSWORD_HASH_CONCURRENCY
+        value: "2"               # at most 2 x 64 MiB argon2 operations at once (D-52); keeps 512 MiB safe
 
 workers:
   - name: worker
