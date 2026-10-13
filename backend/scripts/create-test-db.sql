@@ -1,0 +1,1 @@
+CREATE DATABASE mda_test OWNER mda;

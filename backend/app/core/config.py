@@ -1,0 +1,39 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Runtime configuration. Values come from environment variables / .env (never committed)."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="MDA_", extra="ignore")
+
+    database_url: str = "postgresql+psycopg://mda@localhost:5432/mda"
+    # Separate database for pytest; it is wiped and re-migrated on each test run.
+    test_database_url: str = "postgresql+psycopg://mda@localhost:5432/mda_test"
+    timezone: str = "Asia/Jerusalem"
+
+    # Sessions: approved 30-day inactivity expiry.
+    session_idle_days: int = 30
+    # Avoid a DB write on every request: refresh last_activity_at at most this often.
+    session_touch_minutes: int = 5
+    cookie_secure: bool = False  # MUST be true behind HTTPS in any shared deployment
+    session_cookie_name: str = "mda_session"
+    csrf_cookie_name: str = "mda_csrf"
+
+    # Login rate limit (per process, per email+IP).
+    login_max_failures: int = 8
+    login_window_minutes: int = 15
+
+    # Reminders. (The "registration closing soon" reminder was removed by decision 2026-10-12.)
+    draft_idle_minutes: int = 10
+
+    # Notification channel. "none" = no phone provider connected; messages are marked
+    # "simulated" and only shown in-app. Never reported as delivered.
+    push_channel: str = "none"
+    worker_poll_seconds: int = 30
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

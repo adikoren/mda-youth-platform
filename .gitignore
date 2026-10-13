@@ -1,0 +1,65 @@
+# --- Secrets and local configuration (never commit) ---
+.env
+.env.*
+*.env
+*.env.local
+!.env.example
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json
+service-account*.json
+.npmrc
+.pypirc
+
+# --- Database dumps and local data ---
+*.dump
+*.backup
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+pg_data/
+pgdata/
+dumps/
+backups/
+# SQL files are dumps unless they are project scripts or migrations.
+*.sql
+!backend/scripts/*.sql
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+dist/
+*.tsbuildinfo
+.vite/
+npm-debug.log*
+
+# --- Logs, caches, OS and editor files ---
+*.log
+logs/
+.cache/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- Local tool state (Claude Code sessions, local launch configs) ---
+.claude/
