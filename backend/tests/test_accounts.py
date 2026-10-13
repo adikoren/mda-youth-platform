@@ -119,3 +119,37 @@ def test_admin_can_edit_any_user_and_roles(world):
     r = admin.patch(f"/api/admin/users/{world.uid('mon_vol')}", {"home_weekday": 4, "is_youth_manager": True})
     assert r.status_code == 200 and r.json()["home_weekday"] == 4 and r.json()["roles"] == ["youth_manager"]
     assert admin.patch(f"/api/admin/users/{world.uid('admin')}", {"is_admin": False}).status_code == 403
+
+
+def test_password_hashing_is_bounded_to_protect_memory(monkeypatch):
+    """At most `password_hash_concurrency` argon2 operations run at once (64 MiB each)."""
+    import threading
+    import time
+
+    from app.accounts import security
+
+    active, peak, lock = 0, 0, threading.Lock()
+    real = security._hasher
+
+    class CountingHasher:
+        def hash(self, p):
+            return real.hash(p)
+
+        def verify(self, h, p):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return real.verify(h, p)
+
+    h = security.hash_password("a-long-test-password")
+    monkeypatch.setattr(security, "_hasher", CountingHasher())
+    threads = [threading.Thread(target=security.verify_password, args=(h, "a-long-test-password")) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak == 2

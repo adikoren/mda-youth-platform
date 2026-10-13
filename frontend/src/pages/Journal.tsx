@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, isUnreachable, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
 import { SHIFT, dayTitle, fmtDateTime } from "../he";
 import { GROUPS, fromFields, threeWayMerge, toFields, type Values } from "../merge";
 import {
-  drafts, keys, newRideId, rememberJournal, resolveDraft, retryDraft, snapshots, syncDrafts, type Draft, type Snapshot,
+  drafts, edits as editStore, keys, newRideId, rememberJournal, resolveDraft, retryDraft, snapshots, syncDrafts,
+  type Draft, type Edit, type Snapshot,
 } from "../offline";
 import { Loading, Shell, errorText, useLoad } from "../ui";
 
@@ -42,6 +43,7 @@ interface RideRow {
   can_assess: boolean;
   can_edit_description: boolean;
   cancelled?: { at: string; reason: string; duplicate_of_seq: number | null } | null;
+  counted?: boolean;
   localOnly?: boolean;
 }
 interface Summary { strengths: string | null; strengths_none: boolean; improvements: string | null; improvements_none: boolean; version: number }
@@ -74,17 +76,52 @@ interface DraftActions {
   onDiscard: (key: string) => void;
   onResolve: (key: string, payload: Record<string, unknown>) => void;
   onRetry: (key: string) => void;
+  /** Local, unsaved edits (kept on the device while typing; sent only on Save). */
+  edits: Map<string, Edit>;
+  onEdit: (key: string, payload: Record<string, unknown> | null) => void;
+  onDiscardRide: (rideId: string) => void;
+}
+
+/** Keeps what is typed on the device (debounced) until Save; `null` when it equals the saved value. */
+function useLocalEdit(actions: DraftActions, key: string, value: unknown, saved: unknown, enabled = true) {
+  const first = useRef(true);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; } // nothing typed yet on mount
+    if (!enabled) return;
+    timer.current = setTimeout(() => {
+      const same = JSON.stringify(value) === JSON.stringify(saved);
+      actions.onEdit(key, same ? null : (value as Record<string, unknown>));
+    }, 400);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(value)]);
+  // Save calls this first, so a pending local write can never land after the save.
+  return () => { if (timer.current) clearTimeout(timer.current); };
+}
+
+function UnsavedBadge({ k, actions, onRevert }: { k: string; actions: DraftActions; onRevert: () => void }) {
+  if (!actions.edits.has(k)) return null;
+  return (
+    <span className="row">
+      <span className="badge late" role="status">שינויים שלא נשמרו — שמורים במכשיר בלבד</span>
+      <button className="btn small ghost" onClick={() => { actions.onEdit(k, null); onRevert(); }}>ביטול השינויים</button>
+    </span>
+  );
 }
 
 function useDrafts(userId: string | undefined) {
   const [list, setList] = useState<Draft[]>([]);
+  const [edits, setEdits] = useState<Map<string, Edit>>(new Map());
   const refresh = useCallback(async () => {
-    if (userId) setList(await drafts.all(userId));
+    if (!userId) return;
+    setList(await drafts.all(userId));
+    setEdits(new Map((await editStore.all(userId)).map((e) => [e.key, e])));
   }, [userId]);
   useEffect(() => {
     refresh();
   }, [refresh]);
-  return { list, refresh };
+  return { list, edits, refresh };
 }
 
 export function JournalPage() {
@@ -136,13 +173,17 @@ export function JournalPage() {
     if (!me) return;
     setConfirmed((prev) => { const n = new Set(prev); n.delete(draft.key); return n; });
     setSending((prev) => new Set([...prev, draft.key]));
-    // Editing the description of a ride that is itself still a local draft: fold into the ride draft.
+    // A ride not yet on the server (still local, or queued): the description travels with the ride
+    // itself; saving any other part queues the ride too. Only Save ever queues anything.
     const rideDraft = d.list.find((x) => x.key === keys.ride(draft.ride_id ?? ""));
-    if (draft.kind === "description" && rideDraft && rideDraft.state === "pending") {
-      await drafts.put(me.id, { ...rideDraft, payload: { ...rideDraft.payload, ...draft.payload }, updated_at: Date.now() });
+    const unsentRide = rideDraft && (rideDraft.state === "pending" || rideDraft.state === "local");
+    if (draft.kind === "description" && unsentRide) {
+      await drafts.put(me.id, { ...rideDraft, payload: { ...rideDraft.payload, ...draft.payload }, state: "pending", updated_at: Date.now() });
     } else {
+      if (unsentRide && rideDraft.state === "local") await drafts.put(me.id, { ...rideDraft, state: "pending", updated_at: Date.now() });
       await drafts.put(me.id, { ...draft, updated_at: Date.now(), state: "pending" });
     }
+    await editStore.remove(me.id, draft.key);
     await d.refresh();
     try { await sync(); } finally {
       setSending((prev) => { const n = new Set(prev); n.delete(draft.key); return n; });
@@ -154,6 +195,19 @@ export function JournalPage() {
     onDiscard: async (k) => { await drafts.remove(me!.id, k); d.refresh(); },
     onResolve: async (k, payload) => { await resolveDraft(me!.id, k, payload); await d.refresh(); await sync(); },
     onRetry: async (k) => { await retryDraft(me!.id, k); await d.refresh(); await sync(); },
+    edits: d.edits,
+    onEdit: async (k, payload) => {
+      if (!me) return;
+      if (payload) await editStore.put(me.id, { key: k, payload, updated_at: Date.now() });
+      else await editStore.remove(me.id, k);
+      await d.refresh();
+    },
+    onDiscardRide: async (rideId) => {
+      if (!me) return;
+      for (const x of d.list.filter((y) => y.ride_id === rideId)) await drafts.remove(me.id, x.key);
+      for (const k of [keys.description(rideId), keys.assessment(rideId)]) await editStore.remove(me.id, k);
+      await d.refresh();
+    },
   };
 
   if (!data) {
@@ -182,13 +236,17 @@ export function JournalPage() {
     });
   const rides = [...localRides, ...data.rides];
   const pendingCount = myDrafts.filter((x) => x.state === "pending").length;
+  const unsavedCount = myDrafts.filter((x) => x.state === "local").length
+    + [...d.edits.keys()].filter((k) => rides.some((r) => k.includes(r.id)) || k.includes(data.trainee.id)).length;
   const isSelf = data.access.is_self;
   const fromDevice = !j.data && copy;
 
   async function addRide(shiftId: string) {
+    // Only a local record: nothing is sent or counted until the person saves content (D-50).
     const id = newRideId();
-    await save({ key: keys.ride(id), kind: "ride", ride_id: id, trainee_id: data!.trainee.id, shift_id: shiftId,
-                 payload: {}, base_version: 0 });
+    await drafts.put(me!.id, { key: keys.ride(id), kind: "ride", ride_id: id, trainee_id: data!.trainee.id, shift_id: shiftId,
+                               payload: {}, base_version: 0, state: "local", updated_at: Date.now() });
+    await d.refresh();
   }
 
   const creatableShifts = isSelf
@@ -212,6 +270,7 @@ export function JournalPage() {
       {needsLogin && (
         <div className="error">פג תוקף ההתחברות. הטיוטות שמורות במכשיר — <Link to="/login">התחברות מחדש</Link> ואז הן יישלחו.</div>
       )}
+      {unsavedCount > 0 && <div className="notice">יש {unsavedCount} שינויים שלא נשמרו — שמורים במכשיר בלבד. לחצו "שמירה" כדי לשלוח למערכת.</div>}
       {pendingCount > 0 && <div className="notice">טיוטה במכשיר — ממתינה לסנכרון ({pendingCount}). הנסיעות ייספרו רק אחרי אישור השרת.</div>}
       {syncMsg && <div className="ok">{syncMsg}</div>}
 
@@ -314,6 +373,7 @@ function DraftStatus({ draft, actions, k }: { draft?: Draft; actions: DraftActio
     return <span className="badge" role="status">שומר…</span>;
   }
   if (!draft) return key && actions.confirmed.has(key) ? <span className="badge youth" role="status">✓ נשמר במערכת</span> : null;
+  if (draft.state === "local") return null; // not saved yet: shown by the ride's own "not saved" badge
   if (draft.state === "pending") return <span className="badge late" role="status">טיוטה במכשיר — ממתינה לסנכרון</span>;
   if (draft.state === "conflict" && draft.kind !== "ride") {
     return <ConflictChooser draft={draft} onResolve={actions.onResolve} onDiscard={() => actions.onDiscard(draft.key)} />;
@@ -373,21 +433,33 @@ function RideCard({ r, traineeId, drafts: ds, actions, manage }: {
   r: RideRow; traineeId: string; drafts: Draft[]; actions: DraftActions;
   manage?: { others: RideRow[]; reload: () => void };
 }) {
-  const descDraft = ds.find((x) => x.kind === "description") ?? (r.localOnly ? ds.find((x) => x.kind === "ride") : undefined);
+  const rideDraft = r.localOnly ? ds.find((x) => x.kind === "ride") : undefined;
+  const descDraft = ds.find((x) => x.kind === "description") ?? rideDraft;
   const assessDraft = ds.find((x) => x.kind === "assessment");
-  const [desc, setDesc] = useState<string>((descDraft?.payload.description as string) ?? r.description ?? "");
-  const initialMarkers = (assessDraft?.payload.markers as Record<string, string | null>) ?? r.assessment?.markers ?? {};
-  const [markers, setMarkers] = useState<Record<string, string | null>>(initialMarkers);
-  const [summary, setSummary] = useState<string>((assessDraft?.payload.summary as string) ?? r.assessment?.summary ?? "");
+  const descKey = keys.description(r.id), assessKey = keys.assessment(r.id);
+  // Last SAVED values (queued draft, else server). Typed-but-unsaved values come from the edit store.
+  const savedDesc = (descDraft?.payload.description as string) ?? r.description ?? "";
+  const savedAssess = {
+    markers: (assessDraft?.payload.markers as Record<string, string | null>) ?? r.assessment?.markers ?? {},
+    summary: (assessDraft?.payload.summary as string) ?? r.assessment?.summary ?? "",
+  };
+  const descEdit = actions.edits.get(descKey)?.payload;
+  const assessEdit = actions.edits.get(assessKey)?.payload as typeof savedAssess | undefined;
+  const [desc, setDesc] = useState<string>((descEdit?.description as string) ?? savedDesc);
+  const [markers, setMarkers] = useState<Record<string, string | null>>(assessEdit?.markers ?? savedAssess.markers);
+  const [summary, setSummary] = useState<string>(assessEdit?.summary ?? savedAssess.summary);
+  const stopDesc = useLocalEdit(actions, descKey, { description: desc }, { description: savedDesc }, r.can_edit_description);
+  const stopAssess = useLocalEdit(actions, assessKey, { markers, summary }, savedAssess, r.can_assess);
+  const hasAssessContent = Object.values(markers).some(Boolean) || summary.trim() !== "";
 
   const base = { trainee_id: traineeId, shift_id: r.shift_id, ride_id: r.id };
   // The server values an edit starts from; kept with the draft for a safe merge on conflict.
-  const saveDesc = () => actions.onSave({
+  const saveDesc = () => stopDesc() ?? actions.onSave({
     ...base, key: keys.description(r.id), kind: "description", payload: { description: desc },
     base_version: descDraft?.base_version ?? r.description_version,
     base: descDraft ? descDraft.base ?? null : { description: r.description },
   });
-  const saveAssessment = () => actions.onSave({
+  const saveAssessment = () => stopAssess() ?? actions.onSave({
     ...base, key: keys.assessment(r.id), kind: "assessment", payload: { markers, summary },
     base_version: assessDraft?.base_version ?? r.assessment?.version ?? 0,
     base: assessDraft ? assessDraft.base ?? null : { markers: r.assessment?.markers ?? {}, summary: r.assessment?.summary ?? null },
@@ -414,8 +486,15 @@ function RideCard({ r, traineeId, drafts: ds, actions, manage }: {
         <strong>{r.seq ? `נסיעה ${r.seq}` : "נסיעה חדשה"}</strong>
         <span className="muted">{r.date && dayTitle(r)} · {SHIFT[r.kind]}</span>
       </div>
-      {r.localOnly && (descDraft?.state === "pending" || !descDraft) && <span className="badge late">טיוטה במכשיר — ממתינה לסנכרון</span>}
-      {r.localOnly && descDraft && descDraft.state !== "pending" && <DraftStatus draft={descDraft} actions={actions} />}
+      {rideDraft?.state === "local" && (
+        <span className="row">
+          <span className="badge late" role="status">נסיעה חדשה במכשיר — עוד לא נשמרה ולא נספרת</span>
+          <button className="btn small ghost" onClick={() => actions.onDiscardRide(r.id)}>מחיקת הטיוטה</button>
+        </span>
+      )}
+      {r.localOnly && descDraft?.state === "pending" && <span className="badge late">טיוטה במכשיר — ממתינה לסנכרון</span>}
+      {!r.localOnly && r.counted === false && <span className="badge">רשומה ריקה — לא נספרת עד שיתווסף תוכן</span>}
+      {r.localOnly && descDraft && (descDraft.state === "denied" || descDraft.state === "conflict") && <DraftStatus draft={descDraft} actions={actions} />}
 
       <label className="field">
         תיאור המקרה {r.can_edit_description ? "" : "(ממלא/ת החניך/ה)"}
@@ -427,7 +506,9 @@ function RideCard({ r, traineeId, drafts: ds, actions, manage }: {
       </label>
       {r.can_edit_description && (
         <div className="row">
-          <button className="btn small" disabled={desc === (r.description ?? "") && !descDraft} onClick={saveDesc}>שמירת תיאור</button>
+          <button className="btn small" disabled={rideDraft?.state === "local" ? !desc.trim() : desc === savedDesc && !actions.edits.has(descKey)}
+                  onClick={saveDesc}>שמירת תיאור</button>
+          <UnsavedBadge k={descKey} actions={actions} onRevert={() => setDesc(savedDesc)} />
           {r.awaiting_description && !r.localOnly && <span className="badge late">ממתין לתיאור שלך</span>}
           {!r.localOnly && <DraftStatus draft={descDraft} actions={actions}
                                         k={actions.confirmed.has(keys.ride(r.id)) ? keys.ride(r.id) : keys.description(r.id)} />}
@@ -453,7 +534,10 @@ function RideCard({ r, traineeId, drafts: ds, actions, manage }: {
               <textarea rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} />
             </label>
             <div className="row">
-              <button className="btn small primary" onClick={saveAssessment}>שמירת הערכה</button>
+              <button className="btn small primary" disabled={rideDraft?.state === "local" && !hasAssessContent}
+                      onClick={saveAssessment}>שמירת הערכה</button>
+              <UnsavedBadge k={assessKey} actions={actions}
+                            onRevert={() => { setMarkers(savedAssess.markers); setSummary(savedAssess.summary); }} />
               <DraftStatus draft={assessDraft} actions={actions} k={keys.assessment(r.id)} />
             </div>
           </>
@@ -490,13 +574,20 @@ function SummaryField({ label, text, none, setText, setNone, editable }: {
 function ShiftSummaryCard({ s, traineeId, draft, actions }: {
   s: ShiftRow; traineeId: string; draft?: Draft; actions: DraftActions;
 }) {
+  const key = keys.summary(traineeId, s.shift_id);
   const src = (draft?.payload as unknown as Summary | undefined) ?? s.summary;
-  const [strengths, setStrengths] = useState(src?.strengths ?? "");
-  const [strengthsNone, setStrengthsNone] = useState(src?.strengths_none ?? false);
-  const [improvements, setImprovements] = useState(src?.improvements ?? "");
-  const [improvementsNone, setImprovementsNone] = useState(src?.improvements_none ?? false);
+  const saved = { strengths: src?.strengths ?? "", strengths_none: src?.strengths_none ?? false,
+                  improvements: src?.improvements ?? "", improvements_none: src?.improvements_none ?? false };
+  const typed = actions.edits.get(key)?.payload as typeof saved | undefined;
+  const start = typed ?? saved;
+  const [strengths, setStrengths] = useState(start.strengths);
+  const [strengthsNone, setStrengthsNone] = useState(start.strengths_none);
+  const [improvements, setImprovements] = useState(start.improvements);
+  const [improvementsNone, setImprovementsNone] = useState(start.improvements_none);
+  const stopEdit = useLocalEdit(actions, key, { strengths, strengths_none: strengthsNone, improvements, improvements_none: improvementsNone },
+                               saved, s.can_mentor);
   const c = s.completeness;
-  const saveIt = () => actions.onSave({
+  const saveIt = () => stopEdit() ?? actions.onSave({
     key: keys.summary(traineeId, s.shift_id), kind: "summary", trainee_id: traineeId, shift_id: s.shift_id,
     payload: { strengths, strengths_none: strengthsNone, improvements, improvements_none: improvementsNone },
     base_version: draft?.base_version ?? s.summary?.version ?? 0,
@@ -521,6 +612,10 @@ function ShiftSummaryCard({ s, traineeId, draft, actions }: {
       {s.can_mentor && (
         <div className="row">
           <button className="btn small primary" onClick={saveIt}>שמירת סיכום</button>
+          <UnsavedBadge k={key} actions={actions} onRevert={() => {
+            setStrengths(saved.strengths); setStrengthsNone(saved.strengths_none);
+            setImprovements(saved.improvements); setImprovementsNone(saved.improvements_none);
+          }} />
           <DraftStatus draft={draft} actions={actions} k={keys.summary(traineeId, s.shift_id)} />
         </div>
       )}

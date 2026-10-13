@@ -296,15 +296,17 @@ def reminders(db, kind):
 def test_reminders_at_shift_end_and_0900_only_while_incomplete(world, clock, evening, db):
     clock.set(at(THU, "17:00"))
     mentor = Client("thu.mentor@x.test")
-    rid, _ = new_ride(mentor, world, shift_id=evening)  # trainee description missing, mentor part missing
-    new_ride(Client("thu.trainee2@x.test"), world, "thu_trainee2", evening)  # no formal mentor, no description
+    rid, _ = new_ride(mentor, world, shift_id=evening)
+    # One marker makes it a real record: trainee description missing, mentor part incomplete.
+    mentor.put(f"/api/journal/rides/{rid}/assessment", {"markers": {"pulse": "success"}, "expected_version": 0})
+    new_ride(Client("thu.trainee2@x.test"), world, "thu_trainee2", evening)  # empty record: not a ride, no reminder
     worker.run_once(at(THU, "22:59"))
     assert reminders(db, "journal_reminder_trainee") == [] and reminders(db, "journal_reminder_mentor") == []
     worker.run_once(at(THU, "23:00"))
     worker.run_once(at(THU, "23:30"))  # same phase: no duplicates
     t = reminders(db, "journal_reminder_trainee")
     m = reminders(db, "journal_reminder_mentor")
-    assert {x.recipient_user_id for x in t} == {world.users["thu_trainee"].id, world.users["thu_trainee2"].id}
+    assert {x.recipient_user_id for x in t} == {world.users["thu_trainee"].id}
     # Both formal mentors of the first ambulance; nobody for the mentor-less trainee.
     assert {x.recipient_user_id for x in m} == {world.users["thu_mentor"].id, world.users["thu_mgr"].id}
     assert all(x.payload["trainee_id"] == world.uid("thu_trainee") for x in m)
@@ -319,7 +321,7 @@ def test_reminders_at_shift_end_and_0900_only_while_incomplete(world, clock, eve
 
     # Complete everything: no further reminders.
     clock.set(at("2026-10-16", "09:10"))
-    mentor.put(f"/api/journal/rides/{rid}/assessment", {"markers": FULL, "summary": "טוב", "expected_version": 0})
+    mentor.put(f"/api/journal/rides/{rid}/assessment", {"markers": FULL, "summary": "טוב", "expected_version": 1})
     mentor.put(f"/api/journal/summaries/{world.uid('thu_trainee')}/{evening}",
                {"strengths_none": True, "improvements_none": True, "expected_version": 0})
     db.execute(text("delete from notification_outbox where event_type like 'journal_reminder_%'"))
@@ -376,3 +378,31 @@ def test_personal_notes_privacy_and_sharing(world, clock, evening, db):
 
 def test_notification_status_reports_no_phone_channel(world):
     assert Client("thu.trainee@x.test").get("/api/me/notification-status").json() == {"phone_channel_connected": False}
+
+
+# ---------------- what counts as a ride (decision 2026-10-13) ----------------
+
+def test_empty_ride_never_counts_and_partial_documentation_does(world, clock, evening):
+    clock.set(at(THU, "17:00"))
+    trainee, mentor = Client("thu.trainee@x.test"), Client("thu.mentor@x.test")
+    count = lambda: trainee.get("/api/journal/me").json()["progress"]["ride_count"]
+    rid, r = new_ride(mentor, world, shift_id=evening)  # an empty record (no description, no assessment)
+    assert r.status_code == 201 and count() == 0
+    ride = next(x for x in trainee.get("/api/journal/me").json()["rides"] if x["id"] == rid)
+    assert ride["counted"] is False
+    # Empty records are not "missing documentation" either.
+    comp = completeness_of(mentor, world, "thu_trainee", evening)
+    assert comp["trainee_missing"] == 0 and comp["mentor_missing_rides"] == 0
+    # One marker is enough to count; a complete assessment is not required.
+    assert mentor.put(f"/api/journal/rides/{rid}/assessment", {"markers": {"pulse": "success"}, "expected_version": 0}).status_code == 200
+    assert count() == 1
+    # Adding the trainee's description later keeps it at one.
+    assert trainee.put(f"/api/journal/rides/{rid}/description", {"description": "סחרחורת", "expected_version": 0}).status_code == 200
+    assert count() == 1
+    # A trainee ride counts as soon as it has a description, before any assessment.
+    new_ride(trainee, world, shift_id=evening, description="כאב ראש")
+    assert count() == 2
+    # Clearing all content makes a record empty again: it stops counting.
+    assert mentor.put(f"/api/journal/rides/{rid}/assessment", {"markers": {}, "summary": "", "expected_version": 1}).status_code == 200
+    assert trainee.put(f"/api/journal/rides/{rid}/description", {"description": "", "expected_version": 1}).status_code == 200
+    assert count() == 1

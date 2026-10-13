@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +25,8 @@ class Settings(BaseSettings):
     # Login rate limit (per process, per email+IP).
     login_max_failures: int = 8
     login_window_minutes: int = 15
+    # Simultaneous argon2 hash/verify operations (64 MiB each). Bounds API memory (D-52).
+    password_hash_concurrency: int = 2
 
     # Reminders. (The "registration closing soon" reminder was removed by decision 2026-10-12.)
     draft_idle_minutes: int = 10
@@ -32,6 +35,16 @@ class Settings(BaseSettings):
     # "simulated" and only shown in-app. Never reported as delivered.
     push_channel: str = "none"
     worker_poll_seconds: int = 30
+
+    @field_validator("database_url", "test_database_url")
+    @classmethod
+    def _psycopg_driver(cls, url: str) -> str:
+        """Managed databases (e.g. DigitalOcean's ${db.DATABASE_URL}) hand out postgres:// or
+        postgresql:// URLs; SQLAlchemy needs the psycopg 3 driver named explicitly."""
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix):]
+        return url
 
 
 @lru_cache
