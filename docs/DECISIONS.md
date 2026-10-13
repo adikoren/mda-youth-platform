@@ -157,6 +157,9 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Before:** unbounded, 10 simultaneous logins took the API from about 160 MiB to 733 MiB, and 40 took it to 808 MiB.
   - **After:** the peak is 237 MiB, which makes the $5 (512 MiB) App Platform plan safe. Details in docs/DEPLOYMENT.md.
   - Throughput is unchanged on a 1-vCPU container, because hashing there is CPU-bound.
+  - **Coverage:** the limit covers signup (`hash_password`) and login (`verify_password`); the CLI runs in its own process.
+  - **One process:** it is per-process, so the API runs `uvicorn --workers 1` explicitly.
+  - **Linux check (512 MiB, 1 CPU):** peak 208 MiB with 0 OOM kills over bursts of up to 80 logins. With the limit raised to 40, the kernel OOM-killed the container.
 
 ## Not built yet
 

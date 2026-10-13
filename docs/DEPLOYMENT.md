@@ -15,16 +15,18 @@ Prices come from DigitalOcean's pricing docs, read 2026-10-13 (App Platform page
 | Worker `worker` | Reminders and the notification outbox, a pass every 30 s | `apps-s-1vcpu-0.5gb` (512 MiB), 1 instance | **$5.00** |
 | Static site `web` | The built React app (CDN), `/` | — | **$0**, at worst $3 (see notes) |
 | Pre-deploy job `migrate` | `alembic upgrade head` before every release | `apps-s-1vcpu-0.5gb`, only while running | ≈ $0.01 per deploy |
-| **Total** | | | **≈ $25 / month** (at most ≈ $28 plus usage below) |
+| **Fixed monthly total** | | | **$25.00** (+ $3.00 if the static site is billed — confirm at creation) |
 
-**Possible additional charges**
-- **Static site:** the free tier covers static-site-only apps. For an app that also has services, DigitalOcean's page does not state the static component's price clearly; at worst it is $3/month. Check the price shown at app creation.
-- **Outbound bandwidth:** the two $5 containers include 50 GiB each, pooled per team. Extra transfer is $0.02/GiB, and expected usage is far below the allowance. Database traffic is free.
-- **Database storage** beyond the included 10 GiB: $0.215/GiB/month. Not expected for this data volume.
-- **Migration job:** billed per second only while it runs.
-- **Not used, so no charge:** dedicated egress IP, standby or read-only database nodes.
-- **Billing periods:** App Platform bills per second, up to 28 days a month per component. Databases bill hourly. Renaming a component restarts its 28-day count.
-- **Existing apps:** the account's 4 existing Frankfurt apps (`sea-lion-app`, `monkfish-app`, `starfish-app`, `lionfish-app`) are not touched and are billed separately.
+**Usage-based charges (on top of the fixed total; not capped)**
+
+These depend on usage, so no monthly figure is a hard maximum.
+- **Outbound bandwidth:** $0.02/GiB beyond the team allowance. The two $5 containers include 50 GiB each, pooled per team, so about 100 GiB. The app transfers little (the JS bundle is about 76 KB gzipped), so normal use should stay well inside the allowance. Database traffic is free.
+- **Database storage** beyond the included 10 GiB: $0.215/GiB/month. Not expected at this data volume.
+- **Pre-deploy migration job:** billed per second at the $5 rate while it runs. Each deploy costs a fraction of a cent.
+- **Taxes:** VAT/sales tax as applicable.
+- **Not used, so no charge:** dedicated egress IP, standby or read-only database nodes, extra API instances.
+
+**Billing rules:** App Platform bills per second, up to 28 days a month per component; renaming a component restarts its 28-day count. Databases bill hourly. The account's 4 existing Frankfurt apps (`sea-lion-app`, `monkfish-app`, `starfish-app`, `lionfish-app`) are not touched and are billed separately.
 
 **Alternatives**
 - **≈ $30:** the API on `apps-s-1vcpu-1gb-fixed` ($10). It is needed only if measured memory grows past about 400 MiB; see below.
@@ -59,15 +61,51 @@ The API was run exactly as deployed: one uvicorn process with `--proxy-headers`,
 
 **Re-check after the first deploy:** read the `api` memory graph in App Platform Insights. Move to the $10 plan if the steady peak goes above about 400 MiB.
 
+## Linux container test, 512 MiB and 1 CPU (2026-10-13)
+
+The API was built from `backend/` into a `python:3.12-slim` image that approximates the buildpack: the same pinned `requirements.txt`, the same uvicorn command with `--workers 1`, and `MALLOC_ARENA_MAX=2`.
+- **Limits:** `--memory=512m --memory-swap=512m --cpus=1`, matching the `apps-s-1vcpu-0.5gb` plan.
+- **Database:** PostgreSQL 16 in a second container, reached with a plain `postgresql://` URL as App Platform provides.
+- **Measurement:** memory from cgroup v2 (`memory.current`, `memory.stat` anon, and the kernel's `memory.peak` and `oom_kill` counters). Latency was measured by the load client.
+
+Results with the production setting, `MDA_PASSWORD_HASH_CONCURRENCY=2`:
+
+| Load (all requests at once) | OK | p50 | p95 | max | Container memory peak |
+|---|---|---|---|---|---|
+| 10 signups | 10/10 | 1.9 s | 2.8 s | 2.8 s | 202 MiB |
+| 20 signups | 20/20 | 2.9 s | 4.9 s | 4.9 s | 203 MiB |
+| 40 signups | 40/40 | 5.6 s | 10.2 s | 10.2 s | 205 MiB |
+| 10 logins | 10/10 | 1.7 s | 2.6 s | 2.6 s | 205 MiB |
+| 20 logins | 20/20 | 3.1 s | 4.7 s | 4.7 s | 205 MiB |
+| 40 logins | 40/40 | 5.4 s | 9.5 s | 9.6 s | 206 MiB |
+| 80 logins | 80/80 | 10.1 s | 19.0 s | 19.5 s | 207 MiB |
+| 60 mixed signups and logins | 60/60 | 8.8 s | 14.0 s | 14.3 s | 207 MiB |
+| 100 manager-board loads (10 concurrent) | 100/100 | 84 ms | 110 ms | 144 ms | 78 MiB |
+| 60 rides + assessments (4 concurrent) | 60/60 | 42 ms | 109 ms | 122 ms | 80 MiB |
+| 100 journal views (10 concurrent) | 100/100 | 194 ms | 252 ms | 303 ms | 87 MiB |
+
+**Summary:**
+- **Memory:** idle 63 MiB; the kernel `memory.peak` was **208 MiB of 512 MiB**.
+- **OOM:** `oom_kill` events **0**; the container was never restarted. Memory returned to about 80 MiB after the bursts.
+- **Login and signup speed:** each password operation takes about 250 ms of CPU on 1 vCPU, and the 2-slot limit queues the rest. A burst of N simultaneous logins therefore finishes in roughly N × 0.25 s, the same as without the limit, because the CPU is the bottleneck. With 30-day sessions, real login bursts should be far smaller than these tests.
+- **Other flows:** schedule and journal requests stay well under 0.3 s.
+
+**Control run (limit raised to 40):** the same container was OOM-killed by the kernel during the signup and login bursts (exit 137, `OOMKilled=true`). The limit is what makes 512 MiB safe.
+
+**Other Linux checks:**
+- The pre-deploy command `alembic upgrade head` reached `0004 (head)`.
+- The worker completed a pass (44 reminders, 54 messages).
+- A clean `npm ci && npm run build` on `node:20-slim` produced `dist/`, including `sw.js` and the logo.
+
 ## Why this shape
 
 - **One origin:** the frontend and API share a domain (ingress `/api` → api, `/` → web). The HttpOnly session cookie and the CSRF cookie stay first-party, so no CORS is needed. `MDA_COOKIE_SECURE=true` is set for the API.
-- **API instance count:** exactly 1, because the login rate limit lives in process memory (D-09). Scaling out first needs a shared store for it.
+- **API instance count:** exactly 1 instance and exactly 1 process (`--workers 1` is explicit, so a platform `WEB_CONCURRENCY` cannot start more). The login rate limit (D-09) and the password-hashing limit (D-52) both live in process memory. Scaling out first needs a shared store for the rate limit.
 - **Worker:** a separate component, so reminders and outbox delivery keep running independently of web traffic. A duplicate run would still be safe, because the outbox dedup keys are unique in the database.
 - **Migrations:** run as a pre-deploy job. A failed migration stops the release, and the previous version keeps serving.
 - **Real client IP:** uvicorn runs with `--proxy-headers`, so the rate limit sees the client IP rather than DigitalOcean's proxy.
 - **Database URL:** App Platform hands out `postgresql://…?sslmode=require`; `Settings` converts it to `postgresql+psycopg://` automatically, with a test. TLS stays required.
-- **Builds:** the Python buildpack reads `backend/requirements.txt` (pinned to the tested versions) and `backend/.python-version` (3.12). The frontend builds with `npm ci && npm run build`.
+- **Builds:** the Python buildpack reads `backend/requirements.txt` (pinned to the tested versions) and `backend/runtime.txt` (`python-3.12.13`, the documented way to choose the version; the default would be 3.13). The frontend builds with `npm ci && npm run build`.
 - **Releases:** deploys come from `main`, with `deploy_on_push: false`, so every release is a manual decision.
 
 ## Steps when Adi approves (in order)

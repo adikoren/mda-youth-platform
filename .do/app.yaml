@@ -38,8 +38,10 @@ services:
       deploy_on_push: false      # deploy manually; no surprise releases
     source_dir: backend
     environment_slug: python     # buildpack installs backend/requirements.txt (Python from .python-version)
+    # --workers 1 is explicit: uvicorn would otherwise honour a WEB_CONCURRENCY variable set by the
+    # platform, giving several processes, each with its own hashing limit and login rate limiter.
     run_command: >-
-      uvicorn app.main:app --host 0.0.0.0 --port 8080
+      uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1
       --proxy-headers --forwarded-allow-ips='*'
     http_port: 8080
     instance_size_slug: apps-s-1vcpu-0.5gb   # [cost] $5/month; measured peak 237 MiB (docs/DEPLOYMENT.md)
