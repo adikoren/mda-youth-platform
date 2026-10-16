@@ -62,6 +62,8 @@ def registerable_days(actor: Actor, now: datetime) -> ColumnElement[bool]:
     """Dates the actor may answer availability for (eligibility only, not timing)."""
     if not actor.is_active or actor.level is None:
         return false()
+    if actor.is_admin:  # admin override, same rule as policies.can_register_for_day
+        return true()
     clauses = [_weekday_col() == SATURDAY]
     if actor.home_weekday is not None:
         clauses.append(_weekday_col() == actor.home_weekday)

@@ -677,11 +677,17 @@ function ManagerTools({ j, reload }: { j: Journal; reload: () => void }) {
 
 // ---- mentor home ----
 export function MentorHome() {
+  const { me } = useAuth();
   const list = useLoad(() => api.get<{ trainee_id: string; full_name: string; shift_id: string; kind: ShiftKind; date: string; weekday: number;
     completeness: ShiftRow["completeness"] }[]>("/api/journal/mentor"));
   return (
     <Shell title="חניכה">
       <div className="muted">חניכים מהאמבולנס שלך במשמרת ערב. הגישה פתוחה מ־13:30 ועד 10:00 למחרת.</div>
+      {/* Admin override: the journals of every trainee are reachable at any time, not only in a window. */}
+      {me?.is_admin && <Link className="card list-link" to="/manage/trainees">
+        <span><strong>כל היומנים</strong><br /><span className="muted">אדמין: גישה לכל החניכים, ללא חלון זמן</span></span>
+        <span>›</span>
+      </Link>}
       {isUnreachable(list.failure) ? <OfflineJournals mentorOnly /> : !list.data && <Loading error={list.error} />}
       {list.data?.length === 0 && <div className="card muted">אין כרגע חניכים בחלון החניכה שלך.</div>}
       {list.data?.map((t) => (

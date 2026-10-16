@@ -111,9 +111,15 @@ def has_open_invitation(db: Session, actor: Actor, day: ActivityDay, now: dateti
 
 
 def can_register_for_day(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
-    """Who may give availability for a date (timing is checked separately)."""
+    """Who may give availability for a date (timing is checked separately).
+
+    Admin override (authorization): an admin may answer for any date, without a home day, an
+    invitation or a shift. A volunteer level is still required (a data rule: availability feeds the
+    shift pools, which only contain volunteers)."""
     if not actor.is_active or actor.level is None:
         return False
+    if actor.is_admin:
+        return True
     weekday = local_weekday(day.local_date)
     if weekday == SATURDAY or actor.home_weekday == weekday:
         return True

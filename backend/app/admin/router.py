@@ -243,6 +243,8 @@ def admin_update_user(user_id: uuid.UUID, body: AdminUserIn, actor: Actor = Depe
     if "status" in data and data["status"] != user.status:
         if user.status == "pending":
             raise forbidden("use_approve", "יש לאשר הרשמה דרך מסך האישור")
+        if data["status"] == "inactive" and user.status == "active":
+            accounts.ensure_admin_remains(db, user.id)
         record(db, actor_id=actor.user_id, action="status_change", object_type="user", object_id=user.id, now=now,
                meta={"from": user.status, "to": data["status"]})
         user.status = data["status"]
@@ -252,8 +254,6 @@ def admin_update_user(user_id: uuid.UUID, body: AdminUserIn, actor: Actor = Depe
         hw = data["home_weekday"]
         accounts.set_home_weekday(db, user.id, None if hw in (None, -1) else hw, actor.user_id, now)
     if data.get("is_admin") is not None:
-        if user.id == actor.user_id and not data["is_admin"]:
-            raise forbidden("self_demote", "אי אפשר להסיר הרשאת אדמין מעצמך")
         accounts.set_authority_role(db, user.id, "admin", data["is_admin"], actor.user_id, now)
     if data.get("is_youth_manager") is not None:
         accounts.set_authority_role(db, user.id, "youth_manager", data["is_youth_manager"], actor.user_id, now)

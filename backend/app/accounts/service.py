@@ -61,12 +61,29 @@ def set_home_weekday(db: Session, user_id: uuid.UUID, weekday: int | None, by: u
     return True
 
 
+def active_admin_ids(db: Session) -> list[uuid.UUID]:
+    return list(db.scalars(
+        select(AuthorityRole.user_id).join(User, User.id == AuthorityRole.user_id)
+        .where(AuthorityRole.role == "admin", AuthorityRole.valid_to.is_(None), User.status == "active")))
+
+
+def ensure_admin_remains(db: Session, user_id: uuid.UUID) -> None:
+    """Data integrity, not authorization: the system must always keep at least one active admin.
+    Call before removing an admin role or deactivating an account. Any admin may remove another
+    admin (or themselves) while another active admin exists."""
+    admins = active_admin_ids(db)
+    if user_id in admins and len(admins) == 1:
+        raise conflict("last_admin", "לא ניתן להסיר או להשבית את האדמין האחרון במערכת")
+
+
 def set_authority_role(db: Session, user_id: uuid.UUID, role: str, granted: bool, by: uuid.UUID | None,
                        now: datetime) -> bool:
     if role not in AUTHORITY_ROLES:
         raise bad_request("bad_role", "תפקיד לא חוקי")
     has = db.scalar(select(AuthorityRole.id).where(AuthorityRole.user_id == user_id, AuthorityRole.role == role,
                                                    AuthorityRole.valid_to.is_(None)))
+    if not granted and has is not None and role == "admin":
+        ensure_admin_remains(db, user_id)
     if granted and has is None:
         db.add(AuthorityRole(user_id=user_id, role=role, valid_from=now, granted_by_id=by))
     elif not granted and has is not None:

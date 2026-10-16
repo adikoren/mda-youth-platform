@@ -161,6 +161,31 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **One process:** it is per-process, so the API runs `uvicorn --workers 1` explicitly.
   - **Linux check (512 MiB, 1 CPU):** peak 208 MiB with 0 OOM kills over bursts of up to 80 logins. With the limit raised to 40, the kernel OOM-killed the container.
 
+## Admin authorization (2026-10-16)
+
+- **D-53 Admin is a full-access override, not a role that needs companions.** An admin needs only the admin role (`authority_roles`, role `admin`). No youth-manager role, day-manager scope, home day, invitation or shift is needed. The admin override lives in the shared access layer: `app/access/policies.py` (single-object rules), `app/access/queries.py` (list filters) and `app/access/journal.py` (journal access). Routers and services reuse those helpers.
+  - **Restrictions that Admin overrides (authorization):**
+    - Day scope: `manages_day`, `require_manage_day`, the manager board, publishing, timing and day kind.
+    - Registration eligibility (home day, Saturday, invitation): `can_register_for_day` and `queries.registerable_days`. Added 2026-10-16.
+    - Published schedule visibility and phone numbers.
+    - Journal: home-manager, mentor window and extension checks; trainee records; progress corrections; reopening access; personal notes (read, audited).
+    - Approvals, levels, day-manager appointments, templates, the admin interface, audit and outbox.
+  - **Restrictions Admin does not override (integrity and business rules):**
+    - Volunteer level required for availability and assignment (pools contain volunteers).
+    - Same person at most once per shift; trainee not in reinforcement and evening together.
+    - Capacity 0–3 (a setting; crew above capacity only warns).
+    - Saturday morning cannot be closed.
+    - Day managers must be active mentors.
+    - Published schedules are immutable; publishing needs a change (`nothing_to_publish`); stale drafts conflict.
+    - Cancelled rides cannot be edited.
+    - Only trainees have rides and personal notes.
+    - Day kind changes only before activity.
+    - Registration timing (opens, closes, day ended) is a business rule for volunteer answers, not authority. Admin changes the timing instead.
+  - **Last admin (new integrity rule, replaces the old self-demotion block):** at least one active admin must always remain. Any admin, including oneself, may remove another admin's role or deactivate another account, and may remove their own role while another active admin exists. Enforced in `accounts.service.ensure_admin_remains`, which the role change and the deactivation both call. Error code `last_admin`.
+- **Other roles unchanged.** Youth managers, day managers, mentors, trainees and volunteers keep exactly the scopes in D-06 and the access tests; no new grants were added.
+- **Frontend:** navigation and guards already included Admin. The Mentor screen (`/mentor`) now shows an admin link "כל היומנים" to the full trainee list, since Admin's own mentor list is empty by design.
+- **Verified:** `tests/test_admin_authorization.py` (17 tests) runs Admin across days, screens and admin actions with a solo admin account. Against the original code, the registration-eligibility and last-admin tests fail, and the rest pass, so existing behaviour is preserved.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

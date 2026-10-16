@@ -118,7 +118,14 @@ def test_admin_can_edit_any_user_and_roles(world):
     admin = Client("admin@x.test")
     r = admin.patch(f"/api/admin/users/{world.uid('mon_vol')}", {"home_weekday": 4, "is_youth_manager": True})
     assert r.status_code == 200 and r.json()["home_weekday"] == 4 and r.json()["roles"] == ["youth_manager"]
-    assert admin.patch(f"/api/admin/users/{world.uid('admin')}", {"is_admin": False}).status_code == 403
+    # The only active admin cannot remove the role (or deactivate the account): integrity rule.
+    r = admin.patch(f"/api/admin/users/{world.uid('admin')}", {"is_admin": False})
+    assert r.status_code == 409 and r.json()["code"] == "last_admin"
+    assert admin.patch(f"/api/admin/users/{world.uid('admin')}", {"status": "inactive"}).status_code == 409
+    # With a second active admin, an admin may remove their own role (no lock-out).
+    admin.patch(f"/api/admin/users/{world.uid('mon_vol')}", {"is_admin": True})
+    assert admin.patch(f"/api/admin/users/{world.uid('admin')}", {"is_admin": False}).status_code == 200
+    assert Client("admin@x.test").get("/api/auth/me").json()["is_admin"] is False
 
 
 def test_password_hashing_is_bounded_to_protect_memory(monkeypatch):
