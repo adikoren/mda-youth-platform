@@ -224,6 +224,16 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Tests:** boundaries at 14:59:59, 15:00:00 and 15:00:01 (answers and requests), the end at 22:59:59 and 23:00:00, per-shift independence on a Saturday, a form open across the start, Admin's override, and the stored instants across the 25 Oct DST change (12:00 UTC before, 13:00 UTC after).
   - **Open:** the API still accepts volunteers' direct changes between registration closing and the shift start (D-56). Only the start itself is a hard cutoff so far.
 
+- **D-58 Registration closing enforced by the server** (2026-10-16). Server time decides, per shift and per day:
+  - **Open** (registration window): volunteers register and update their choices directly.
+  - **After closing and before the shift starts:** direct changes are refused for volunteers (409 `registration_closed`, "ההרשמה נסגרה. לשינוי מאוחר יש לשלוח בקשה לאחראי"). Requests are accepted.
+  - **At or after the shift starts:** direct changes and new requests are refused for that shift (409 `shift_started` / `shift_ended`). The shift's own message is checked first, so the most specific reason is shown.
+  - **Management is preserved:** Admin and the day's Day Manager may still change registrations after closing (their late changes are recorded, flagged late, and notify the managers, as before).
+  - **A request never changes** a registration or an assignment (tested by comparing both).
+  - **A form open when closing happens** is refused on submit, the stored answer stands, and the screen refreshes to the server's state.
+  - **Replaces** the earlier approval that allowed volunteers' late edits with a manager notification (the original spec, §10 and the `late_registration` path for volunteers). The manager notification now comes only from management late changes.
+  - **Tests:** `tests/test_registration_closing.py` (closing at 17:59:59 / 18:00:00 / 18:00:01; the window between closing and the start; the start at 14:59:59 / 15:00:00 / 15:00:01; a form open across closing; management after closing) plus updated boundary and late-edit tests.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

@@ -25,17 +25,22 @@ def test_before_opening_is_blocked(world, clock):
     assert register(c, world.day("2026-10-22"), evening=True).status_code == 200
 
 
-def test_late_first_answer_and_late_edit_are_saved_and_notify_manager(world, clock, db):
-    clock.set(at("2026-10-13", "18:00"))  # exactly at closing = late
+def test_volunteers_cannot_change_answers_after_closing_but_the_day_manager_can(world, clock, db):
+    clock.set(at("2026-10-13", "18:00"))  # exactly at closing: closed for volunteers
     c = Client("thu.youth@x.test")
     r = register(c, world.day(THU), evening=True)
-    assert r.status_code == 200 and r.json()["late"] is True
-    r = register(c, world.day(THU), evening="17:00")
+    assert r.status_code == 409 and r.json()["code"] == "registration_closed"
+    assert db.query(OutboxMessage).filter_by(event_type="late_registration").count() == 0
+    # The day's Day Manager's late management change is still recorded and notifies the managers.
+    mgr = Client("thu.mgr@x.test")
+    r = register(mgr, world.day(THU), evening=True)
     assert r.status_code == 200 and r.json()["late"] is True
     msgs = list(db.scalars(select(OutboxMessage).where(OutboxMessage.event_type == "late_registration")))
-    assert len(msgs) == 2 and {m.recipient_user_id for m in msgs} == {world.users["thu_mgr"].id}
+    assert {m.recipient_user_id for m in msgs} == {world.users["thu_mgr"].id}
+    register(mgr, world.day(THU), evening="17:00")
+    assert db.query(OutboxMessage).filter_by(event_type="late_registration").count() == 2
     # Retrying the identical answer is a no-op: no third notification.
-    register(c, world.day(THU), evening="17:00")
+    register(mgr, world.day(THU), evening="17:00")
     assert db.query(OutboxMessage).filter_by(event_type="late_registration").count() == 2
 
 

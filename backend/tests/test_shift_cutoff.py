@@ -33,17 +33,20 @@ def request(client, world, shift_id, text_: str):
 
 # ---------- registration answers: before, at, after the start ----------
 
-def test_registration_answer_boundaries_around_the_shift_start(world, clock):
+def test_registration_answer_boundaries_around_closing_and_the_shift_start(world, clock):
     vol = Client("thu.youth@x.test")
     sid = evening_id(world)
-    clock.set(local(THU, 14, 59, 59))
-    assert answer(vol, world, sid, True).status_code == 200  # one second before: still allowed
-    clock.set(local(THU, 15, 0, 0))  # exactly at the start: closed
+    clock.set(local("2026-10-13", 17, 59, 59))
+    assert answer(vol, world, sid, True).status_code == 200  # one second before closing: open, direct change allowed
+    clock.set(local("2026-10-13", 18, 0, 0))  # exactly at closing: closed for volunteers
+    r = answer(vol, world, sid, False)
+    assert r.status_code == 409 and r.json()["code"] == "registration_closed"
+    clock.set(local(THU, 15, 0, 0))  # exactly at the shift start: refused with the shift's own message
     r = answer(vol, world, sid, False)
     assert r.status_code == 409 and r.json()["code"] == "shift_started" and r.json()["message"] == "המשמרת כבר התחילה"
-    clock.set(local(THU, 15, 0, 1))  # after the start: still closed
+    clock.set(local(THU, 15, 0, 1))
     assert answer(vol, world, sid, False).status_code == 409
-    # The refused change did not happen: the earlier answer stands.
+    # Every refused change left the earlier answer in place.
     shifts = vol.get(f"/api/registrations/{world.day(THU)}").json()["shifts"]
     assert next(s for s in shifts if s["shift_id"] == sid)["available"] is True
 

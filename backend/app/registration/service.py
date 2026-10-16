@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
-from app.access.policies import can_register_for_day, require_manage_day
+from app.access.policies import can_register_for_day, manages_day, require_manage_day
 from app.audit.service import record
 from app.accounts.models import User
 from app.core.errors import bad_request, conflict, not_found
@@ -108,7 +108,11 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
         shift = shifts.get(a["shift_id"])
         if shift is None:
             raise bad_request("shift_not_selectable", "אי אפשר להירשם בעצמך למשמרת זו")
-        _refuse_if_shift_closed(shift, now, actor)
+        _refuse_if_shift_closed(shift, now, actor)  # the shift's own start first: the more specific message
+        # After closing, direct changes are for management only (Admin, and the day's Day Manager). Volunteers
+        # use a written request to the Day Manager instead (DECISIONS D-56 / D-58). Server time decides.
+        if state == "closed_late_allowed" and not (actor.is_admin or manages_day(actor, day)):
+            raise conflict("registration_closed", "ההרשמה נסגרה. לשינוי מאוחר יש לשלוח בקשה לאחראי")
         arrival = a.get("arrival_time")
         if arrival is not None and (not shift.allows_late_arrival or not a["available"]):
             raise bad_request("arrival_not_allowed", "בחירת שעת הגעה אפשרית רק במשמרת ערב ביום רגיל")
