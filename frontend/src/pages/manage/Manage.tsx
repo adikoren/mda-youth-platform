@@ -64,14 +64,25 @@ export function BoardPage() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
+  const [requests, setRequests] = useState<{ id: string; full_name: string; message: string; created_at: string }[]>([]);
+
+  const loadRequests = useCallback(async () => {
+    try {
+      setRequests(await api.get(`/api/manage/days/${dayId}/requests`));
+    } catch {
+      // Keep the last list; the board itself reports its own errors.
+    }
+  }, [dayId]);
+
   const load = useCallback(async () => {
     try {
       // Opening the board ensures a working draft exists (a copy of the live publication).
       setBoard(await api.post<Board>(`/api/manage/days/${dayId}/draft`));
+      await loadRequests();
     } catch (e) {
       setError(errorText(e));
     }
-  }, [dayId]);
+  }, [dayId, loadRequests]);
   useEffect(() => {
     load();
   }, [load]);
@@ -131,6 +142,19 @@ export function BoardPage() {
         </div>
         {board.published && <Link to={`/schedule/${board.day.id}`}>לצפייה בסידור המפורסם</Link>}
       </div>
+
+      {requests.map((q) => (
+        <div key={q.id} className="card stack">
+          <div className="row spread">
+            <span><strong>{q.full_name}</strong> · בקשה להרשמה</span>
+            <button className="btn small" onClick={async () => {
+              await act(() => api.post(`/api/manage/requests/${q.id}/resolve`), "סומן כטופל");
+              await loadRequests();
+            }}>טופל</button>
+          </div>
+          <span className="muted">{q.message}</span>
+        </div>
+      ))}
 
       {board.attentions.map((a) => (
         <div key={a.id} className="card alert row spread">

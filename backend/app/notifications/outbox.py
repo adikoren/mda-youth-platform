@@ -16,6 +16,7 @@ from app.notifications.models import OutboxMessage
 EVENT_TEXT_HE = {
     "registration_opened": "ההרשמה נפתחה",
     "late_registration": "שינוי הרשמה אחרי מועד הסגירה",
+    "registration_request": "בקשה מחניך/מתנדב לגבי הרשמה ליום",
     "availability_withdrawn": "ביטל זמינות — נדרש טיפול",
     "schedule_published": "הסידור פורסם",
     "assigned": "שובצת למשמרת",

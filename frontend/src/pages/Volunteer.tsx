@@ -4,6 +4,7 @@ import { api, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
 import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime, localToday, phoneStatus } from "../he";
 import { LevelBadge, Loading, Shell, errorText, useLoad } from "../ui";
+import { newRideId } from "../offline";
 import { NotificationNotice } from "./Journal";
 
 interface RegShift {
@@ -18,6 +19,7 @@ interface RegShift {
   is_late: boolean;
 }
 interface Reg {
+  requests?: { id: string; status: string; created_at: string }[];
   activity_day_id: string;
   date: string;
   weekday: number;
@@ -209,6 +211,35 @@ export function RegisterDay() {
   const [err, setErr] = useState<string | null>(null);
   const [lateOpen, setLateOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // Written request after closing. Nothing is sent until the explicit submit button is pressed.
+  const [reqOpen, setReqOpen] = useState(false);
+  const [reqText, setReqText] = useState("");
+  const [reqId, setReqId] = useState<string | null>(null); // same id on retry, so a retry never duplicates
+  const [reqSending, setReqSending] = useState(false);
+  const [reqErr, setReqErr] = useState<string | null>(null);
+
+  function openRequest() {
+    setReqId(newRideId());
+    setReqErr(null);
+    setReqOpen(true);
+  }
+
+  async function sendRequest() {
+    if (!reqId) return;
+    setReqSending(true);
+    setReqErr(null);
+    try {
+      await api.post(`/api/registrations/${dayId}/requests`, { id: reqId, message: reqText });
+      setReqOpen(false);
+      setReqText("");
+      setReqId(null);
+      reg.reload();
+    } catch (e) {
+      setReqErr(errorText(e));
+    } finally {
+      setReqSending(false);
+    }
+  }
 
   useEffect(() => {
     const ev = reg.data?.shifts.find((s) => s.allows_late_arrival);
@@ -250,6 +281,31 @@ export function RegisterDay() {
         <div className="notice">אפשר עדיין לעדכן. כל שינוי יישלח לאחראי, ולא משנה שיבוץ שכבר פורסם.</div>
       )}
       {err && <div className="error" role="alert">{err}</div>}
+      {r.window === "closed_late_allowed" && (
+        <section className="request-box stack">
+          {(r.requests?.length ?? 0) > 0 && (
+            <div className="saved" role="status">הבקשה נשלחה לאחראי · {fmtDateTime(r.requests![r.requests!.length - 1].created_at)}</div>
+          )}
+          {!reqOpen ? (
+            <button className="btn" onClick={openRequest}>שליחת בקשה לאחראי</button>
+          ) : (
+            <div className="stack">
+              <label className="field">
+                הבקשה לאחראי
+                <textarea rows={3} maxLength={1000} value={reqText} disabled={reqSending}
+                          onChange={(e) => setReqText(e.target.value)} />
+              </label>
+              <div className="row">
+                <button className="btn primary" disabled={reqSending || reqText.trim().length < 2} onClick={sendRequest}>
+                  {reqErr ? "ניסיון נוסף" : "שליחה לאחראי"}
+                </button>
+                <button className="btn ghost" disabled={reqSending} onClick={() => setReqOpen(false)}>ביטול</button>
+              </div>
+              {reqErr && <div className="error" role="alert">השליחה נכשלה: {reqErr}. הטקסט נשמר, אפשר לנסות שוב.</div>}
+            </div>
+          )}
+        </section>
+      )}
       {r.shifts.length === 0 && <div className="empty">אין ביום זה משמרות פתוחות להרשמה.</div>}
 
       {r.shifts.map((s) => (

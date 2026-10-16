@@ -17,6 +17,7 @@ from app.core.timeutil import local_today
 from app.days.models import ActivityDay
 from app.notifications.models import OutboxMessage
 from app.notifications.outbox import EVENT_TEXT_HE
+from app.registration import service as registration_service
 from app.scheduling import service, views
 
 router = APIRouter(prefix="/api", tags=["schedule"])
@@ -50,6 +51,19 @@ def published(day_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: S
         raise not_found("schedule_not_found", "הסידור לא נמצא")
     include_phone = actor.is_admin or policies.manages_day(actor, day)
     return views.published_schedule(db, actor, day, now, include_phone=include_phone)
+
+
+@router.get("/manage/days/{day_id}/requests")
+def day_requests(day_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db)):
+    """Written requests from volunteers after registration closed, still pending."""
+    return registration_service.pending_requests(db, actor, service.get_day(db, day_id))
+
+
+@router.post("/manage/requests/{request_id}/resolve")
+def resolve_request(request_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
+                    now: datetime = Depends(now_dep)):
+    registration_service.resolve_request(db, actor, request_id, now)
+    return {"ok": True}
 
 
 @router.get("/me/history")

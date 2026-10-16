@@ -14,7 +14,7 @@ export const DAY_KIND: Record<string, string> = {
 export const WINDOW: Record<string, string> = {
   not_open: "ההרשמה טרם נפתחה",
   open: "ההרשמה פתוחה",
-  closed_late_allowed: "ההרשמה נסגרה — שינוי יישלח לאחראי",
+  closed_late_allowed: "ההרשמה נסגרה",
   ended: "התאריך עבר",
 };
 

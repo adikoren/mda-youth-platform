@@ -186,6 +186,21 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
 - **Frontend:** navigation and guards already included Admin. The Mentor screen (`/mentor`) now shows an admin link "כל היומנים" to the full trainee list, since Admin's own mentor list is empty by design.
 - **Verified:** `tests/test_admin_authorization.py` (17 tests) runs Admin across days, screens and admin actions with a solo admin account. Against the original code, the registration-eligibility and last-admin tests fail, and the rest pass, so existing behaviour is preserved.
 
+## Closed registration: written requests to the day manager (2026-10-16)
+
+- **D-54 Request after closing.**
+  - **Label:** after the planning cutoff the registration screen reads "ההרשמה נסגרה" (it used to add "— שינוי יישלח לאחראי").
+  - **Button:** "שליחת בקשה לאחראי" appears only in the closed window (after the cutoff, before the date ends). It opens a form. Nothing is sent until the submit button is pressed.
+  - **Opening the screen** never creates a request, a notification, or an audit row, and never changes the registration (tested).
+  - **Storage:** a new table `registration_requests` (migration 0005) holds the text, so notification payloads stay id-only (D-26). Status is `pending` or `resolved`, the same pattern as availability attentions.
+  - **Notification:** reuses the outbox and the day-manager lookup (`day_manager_ids`), with the event `registration_request`. Dedup is per request id.
+  - **Idempotency:** the client generates the request id. A retry with the same id returns the stored request (200) and sends nothing new. A reused id from another person is refused (409 `request_id_conflict`).
+  - **Window rules:** a request is refused before opening (409 `registration_not_open`), while the registration is open (409 `registration_open`, answer directly instead), and after the date (409 `day_ended`). Only people who can register for the day may submit (404 otherwise).
+  - **Manager view:** the day's board shows pending requests with the text and a "טופל" (handled) button (`POST /api/manage/requests/{id}/resolve`). Only managers of that day, or Admin, see the text.
+  - **Screen state:** the registration response includes the volunteer's own requests, so the screen shows "הבקשה נשלחה לאחראי" with the time after a reload and does not suggest a duplicate. A later request stays possible on purpose.
+  - **Errors:** a failed send shows the error, keeps the text, and offers "ניסיון נוסף" (retry) with the same id.
+  - **Admin:** unchanged. Admin still manages registrations directly.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

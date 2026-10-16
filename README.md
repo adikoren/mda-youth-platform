@@ -25,7 +25,7 @@ backend/
     audit/          minimized audit log
     admin/          admin interface API, youth-manager appointments, calendar config
     cli.py          private setup commands (first admin, seed, dates)
-  migrations/       Alembic (0001 schema + immutability trigger, 0002 journal/mentoring, 0003 ride cancellation, 0004 morning registration)
+  migrations/       Alembic (0001 schema + immutability trigger, 0002 journal/mentoring, 0003 ride cancellation, 0004 morning registration, 0005 registration requests)
   tests/            pytest against real PostgreSQL
 frontend/           React + TS, Hebrew RTL screens; public/sw.js (offline shell), src/merge.ts (conflict merge), tests/
 docs/DECISIONS.md
@@ -74,7 +74,7 @@ cd frontend && npm run build  # type-check + production build
 cd frontend && npm test       # conflict-merge unit tests (Node 23+ built-in runner)
 ```
 
-108 backend tests run against real PostgreSQL, grouped by area:
+118 backend tests run against real PostgreSQL, grouped by area:
 
 - **Calendar and time:** the seven registration calendars, and the 24–25 Oct DST night.
 - **Accounts and access:** sessions, CSRF, rate limiting, pending/admin/youth-manager/day-manager scopes.

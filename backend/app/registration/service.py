@@ -8,13 +8,14 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
-from app.access.policies import can_register_for_day
+from app.access.policies import can_register_for_day, require_manage_day
 from app.audit.service import record
+from app.accounts.models import User
 from app.core.errors import bad_request, conflict, not_found
 from app.core.timeutil import local_midnight_after, local_weekday
 from app.days.models import ActivityDay, Shift
 from app.notifications.outbox import day_manager_ids, enqueue
-from app.registration.models import AvailabilityAttention, Invitation, Registration, RegistrationChoice
+from app.registration.models import AvailabilityAttention, Invitation, Registration, RegistrationChoice, RegistrationRequest
 from app.scheduling.models import Assignment
 
 
@@ -58,6 +59,11 @@ def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) 
         "weekday": local_weekday(day.local_date),
         "window": window_state(day, now), "opens_at": day.registration_opens_at,
         "closes_at": day.registration_closes_at, "revision": reg.revision if reg else 0, "shifts": shifts,
+        # The volunteer's own written requests for this day, so the screen never offers a duplicate.
+        "requests": [{"id": str(q.id), "status": q.status, "created_at": q.created_at} for q in db.scalars(
+            select(RegistrationRequest).where(RegistrationRequest.user_id == actor.user_id,
+                                              RegistrationRequest.activity_day_id == day.id)
+            .order_by(RegistrationRequest.created_at))],
     }
 
 
@@ -173,3 +179,67 @@ def active_invitations(db: Session, actor: Actor, now: datetime) -> list[dict]:
                       .order_by(ActivityDay.local_date)).all()
     return [{"id": str(inv.id), "kind": inv.kind, "activity_day_id": str(day.id), "date": day.local_date.isoformat(),
              "weekday": local_weekday(day.local_date), "shift": kind} for inv, day, kind in rows]
+
+
+# ---------- written requests to the day manager after registration closed ----------
+# Only an explicit submit creates anything. Opening the registration screen never does. A request
+# is allowed only in the closed window (after the planning cutoff, before the date ends); before
+# opening or during the open window the volunteer answers directly, and after the date it is too late.
+
+def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid.UUID, message: str,
+                   now: datetime) -> tuple[RegistrationRequest, bool]:
+    """Idempotent by the client-generated request_id: a retried submit returns the stored request
+    (200) instead of creating a second one or notifying the managers again (201 when created)."""
+    if not can_register_for_day(db, actor, day, now):
+        raise not_found("day_not_found", "היום לא נמצא")
+    existing = db.get(RegistrationRequest, request_id)
+    if existing is not None:
+        if existing.user_id == actor.user_id and existing.activity_day_id == day.id:
+            db.rollback()
+            return existing, False
+        raise conflict("request_id_conflict", "מזהה הבקשה כבר בשימוש")
+    state = window_state(day, now)
+    if state == "not_open":
+        raise conflict("registration_not_open", "ההרשמה ליום זה עוד לא נפתחה")
+    if state == "open":
+        raise conflict("registration_open", "ההרשמה עדיין פתוחה. אפשר לסמן זמינות ישירות")
+    if state == "ended":
+        raise conflict("day_ended", "התאריך כבר עבר")
+    text = (message or "").strip()
+    if len(text) < 2:
+        raise bad_request("request_empty", "יש לכתוב את הבקשה")
+    req = RegistrationRequest(id=request_id, user_id=actor.user_id, activity_day_id=day.id, message=text,
+                              status="pending", created_at=now)
+    db.add(req)
+    db.flush()
+    managers = day_manager_ids(db, local_weekday(day.local_date))
+    enqueue(db, event_type="registration_request", recipients=managers, dedup_prefix=f"reg_request:{req.id}",
+            payload={"date": day.local_date.isoformat(), "activity_day_id": str(day.id),
+                     "request_id": str(req.id), "user_id": str(actor.user_id)}, now=now)
+    # The audit row records that a request was made, not its text (text is private to the volunteer and managers).
+    record(db, actor_id=actor.user_id, action="registration_request", object_type="activity_day", object_id=day.id,
+           now=now, meta={"request": str(req.id)})
+    db.commit()
+    return req, True
+
+
+def pending_requests(db: Session, actor: Actor, day: ActivityDay) -> list[dict]:
+    require_manage_day(actor, day)
+    rows = db.execute(select(RegistrationRequest, User.full_name).join(User, User.id == RegistrationRequest.user_id)
+                      .where(RegistrationRequest.activity_day_id == day.id, RegistrationRequest.status == "pending")
+                      .order_by(RegistrationRequest.created_at)).all()
+    return [{"id": str(r.id), "user_id": str(r.user_id), "full_name": name, "message": r.message,
+             "created_at": r.created_at} for r, name in rows]
+
+
+def resolve_request(db: Session, actor: Actor, request_id: uuid.UUID, now: datetime) -> None:
+    req = db.get(RegistrationRequest, request_id)
+    if req is None:
+        raise not_found("request_not_found", "הבקשה לא נמצאה")
+    day = db.get(ActivityDay, req.activity_day_id)
+    require_manage_day(actor, day)
+    if req.status == "pending":
+        req.status, req.resolved_at, req.resolved_by_id = "resolved", now, actor.user_id
+        record(db, actor_id=actor.user_id, action="registration_request_resolve", object_type="registration_request",
+               object_id=req.id, now=now)
+    db.commit()
