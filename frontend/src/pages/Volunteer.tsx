@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, ApiError, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
 import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDM, fmtDateTime, fmtTime, phoneStatus } from "../he";
-import { LevelBadge, Loading, Shell, errorText, useLoad } from "../ui";
+import { LevelBadge, Loading, Shell, TimeRange, WhatsAppLink, errorText, useLoad } from "../ui";
 import { newRideId } from "../offline";
 import { NotificationNotice } from "./Journal";
 
@@ -48,7 +48,7 @@ interface NextAssignment {
 //   נדרשת פעולה  — red edge + label + one clear action button
 //   השיבוצים שלי — published assignments, solid white cards with an ambulance chip
 //   הרשמה        — dates with a status chip; outline cards
-type RegStatus = { tone: "todo" | "done" | "no" | "wait" | "late"; label: string };
+type RegStatus = { tone: "todo" | "done" | "no" | "wait" | "late" | "plain"; label: string };
 
 function regStatus(r: Reg, invited = false): RegStatus {
   const live = r.shifts.filter((s) => !s.cancelled_at);
@@ -64,7 +64,8 @@ function regStatus(r: Reg, invited = false): RegStatus {
   }
   if (invited) return { tone: "todo", label: "הוזמנת להירשם" };
   if (r.window === "closed_late_allowed") return { tone: "late", label: "נסגרה" };
-  return { tone: "todo", label: "טרם סימנת" };
+  // Plain information only: not a status pill, not clickable.
+  return { tone: "plain", label: "עדיין לא נרשמת" };
 }
 
 
@@ -149,7 +150,7 @@ export function Home() {
             <span className="assign-body">
               <span className="tag tag-published">{next.data.assignment.state === "started" ? "המשמרת מתבצעת" : "שובצת · פורסם"}</span>
               <strong>{dayTitle(next.data.assignment)}</strong>
-              <span className="muted">משמרת {SHIFT[next.data.assignment.kind]} · {fmtTime(next.data.assignment.starts_at)}–{fmtTime(next.data.assignment.ends_at)}</span>
+              <span className="muted">משמרת {SHIFT[next.data.assignment.kind]} · <TimeRange from={next.data.assignment.starts_at} to={next.data.assignment.ends_at} /></span>
               <Link className="btn small" to={`/schedule/${next.data.assignment.activity_day_id}`}>לצפייה בסידור</Link>
               {next.data.assignment.cancellable && (
                 <button className="btn small ghost" onClick={() => cancelShift(next.data!.assignment!.shift_id)}>ביטול שיבוץ</button>
@@ -176,7 +177,7 @@ export function Home() {
                   <span className="muted">{DAY_KIND[r.kind]}</span>
                 </span>
                 <span className="reg-end">
-                  <span className={`status status-${st.tone}`}>{st.label}</span>
+                  {st.tone === "plain" ? <span className="muted">{st.label}</span> : <span className={`status status-${st.tone}`}>{st.label}</span>}
                   {r.window === "open" && r.shifts.some((s) => s.state === "before") ? (
                     <Link className="btn primary small" to={`/register/${r.activity_day_id}`} aria-label={`להרשמה למשמרת ${label}`}>
                       להרשמה למשמרת
@@ -397,7 +398,7 @@ export function RegisterDay() {
         <section key={s.shift_id} className={`shift-card${!s.cancelled_at && s.available === true ? " is-yes" : !s.cancelled_at && s.available === false ? " is-no" : ""}`}>
           <div className="shift-head">
             <h3>משמרת {SHIFT[s.kind]}</h3>
-            <span className="shift-time">{fmtTime(s.starts_at)}–{fmtTime(s.ends_at)}</span>
+            <span className="shift-time"><TimeRange from={s.starts_at} to={s.ends_at} /></span>
           </div>
           <span className="muted">הגעה {fmtTime(s.arrival_at)}</span>
           {s.cancelled_at && <span className="status status-no">בוטל · {fmtDateTime(s.cancelled_at)}</span>}
@@ -434,7 +435,7 @@ export function RegisterDay() {
             )
           )}
           <div className="shift-foot">
-            {s.available === null && <span className="status status-todo">טרם סימנת</span>}
+            {s.available === null && <span className="muted">עדיין לא נרשמת</span>}
             {s.is_late && <span className="status status-late">עודכן אחרי הסגירה</span>}
             {saved?.shift === s.shift_id && (
               <span className="saved" role="status">✓ נשמר{saved.late ? " · האחראי יקבל הודעה" : ""}</span>
@@ -447,12 +448,12 @@ export function RegisterDay() {
   );
 }
 
-interface PubPerson { user_id: string; full_name: string; level: "trainee" | "youth" | "mentor" | null; is_me: boolean; is_guest: boolean; phone?: string }
+interface PubPerson { user_id: string; full_name: string; level: "trainee" | "youth" | "mentor" | null; is_me: boolean; is_guest: boolean; home_weekday_name?: string | null; phone?: string }
 interface PubSchedule {
   day: DaySummary;
   revision: number;
   published_at: string;
-  guest_access_until: string | null;
+  assigned_outside_home: boolean;
   shifts: { id: string; kind: ShiftKind; starts_at: string; ends_at: string; arrival_at: string;
             slots: { slot_key: string; ordinal: number; crew: PubPerson[] }[] }[];
 }
@@ -493,12 +494,12 @@ export function ScheduleView() {
   return (
     <Shell title={dayTitle(d.day)} back="/schedule">
       <div className="muted">פורסם {fmtDateTime(d.published_at)} · גרסה {d.revision}</div>
-      {d.guest_access_until && <div className="notice">משובצ/ת כאורח/ת · הסידור המלא זמין עד {fmtDateTime(d.guest_access_until)}</div>}
+      {d.assigned_outside_home && <div className="notice">שובצת לתאריך זה (לא יום הבית שלך). הסידור המלא זמין לך גם אחרי המשמרת, בהיסטוריית הסידורים.</div>}
       {d.shifts.map((sh) => (
         <div key={sh.id} className="card stack">
           <div className="row spread">
             <h3>{SHIFT[sh.kind]}</h3>
-            <span className="muted">{fmtTime(sh.starts_at)}–{fmtTime(sh.ends_at)} · הגעה {fmtTime(sh.arrival_at)}</span>
+            <span className="muted"><TimeRange from={sh.starts_at} to={sh.ends_at} /> · הגעה {fmtTime(sh.arrival_at)}</span>
           </div>
           {sh.slots.map((sl) => (
             <div key={sl.slot_key} className="slot">
@@ -506,10 +507,11 @@ export function ScheduleView() {
               {sl.crew.length === 0 && <span className="muted">אין שיבוץ</span>}
               {sl.crew.map((p) => (
                 <div key={p.user_id} className="person">
+                  {/* Own name only: other volunteers' profiles are for managers (see Profile page). */}
                   <span className="name">{p.full_name}{p.is_me ? " (אני)" : ""}</span>
                   <LevelBadge level={p.level} />
-                  {p.is_guest && <span className="badge guest">אורח/ת</span>}
-                  {p.phone && <a href={`https://wa.me/${p.phone.replace(/\D/g, "").replace(/^0/, "972")}`} target="_blank" rel="noreferrer">וואטסאפ</a>}
+                  {p.is_guest && <span className="badge guest">אורח/ת{p.home_weekday_name ? ` · יום ${p.home_weekday_name}` : ""}</span>}
+                  {p.phone && <WhatsAppLink phone={p.phone} name={p.full_name} />}
                 </div>
               ))}
             </div>
@@ -523,7 +525,7 @@ export function ScheduleView() {
 export function History() {
   const h = useLoad(() => api.get<HistoryItem[]>("/api/me/history"));
   return (
-    <Shell title="ההיסטוריה שלי">
+    <Shell title="ההיסטוריה שלי" back="/">
       <div className="muted">שיבוצים שפורסמו ולא בוטלו (השתתפות מתוכננת, לא נוכחות בפועל).</div>
       {!h.data && <Loading error={h.error} />}
       {h.data?.length === 0 && <div className="card muted">עוד אין שיבוצים.</div>}

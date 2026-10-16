@@ -7,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
-from app.access.policies import guest_access_end
 from app.core.timeutil import SATURDAY, WEEKDAY_NAMES_HE, local_today, local_weekday
 from app.days.models import ActivityDay, Shift
 from app.registration.models import AvailabilityAttention, Invitation, Registration, RegistrationChoice
@@ -42,6 +41,12 @@ def _shift_out(s: Shift) -> dict:
             "registration_toggle": s.kind == "morning" and local_weekday(local_today(s.starts_at)) != SATURDAY}
 
 
+def _home_info(p) -> dict:
+    """A guest's actual home weekday, shown next to the name (kept separate from role labels)."""
+    wd = p.home_weekday
+    return {"home_weekday": wd, "home_weekday_name": WEEKDAY_NAMES_HE[wd] if wd is not None else None}
+
+
 def _person_out(p, extra: dict | None = None) -> dict:
     out = {"user_id": str(p.user_id), "full_name": p.full_name, "level": p.level}
     out.update(extra or {})
@@ -60,7 +65,8 @@ def published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetim
     by_slot: dict[uuid.UUID, list] = {}
     for a in assignments:
         p = info[a.user_id]
-        extra = {"is_me": a.user_id == actor.user_id, "is_guest": wd != SATURDAY and p.home_weekday != wd}
+        extra = {"is_me": a.user_id == actor.user_id, "is_guest": wd != SATURDAY and p.home_weekday != wd,
+                 **_home_info(p)}
         if include_phone:
             extra["phone"] = p.phone
         by_slot.setdefault(a.slot_id, []).append(_person_out(p, extra))
@@ -73,11 +79,9 @@ def published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetim
             {"slot_key": str(sl.slot_key), "ordinal": sl.ordinal, "capacity": sl.capacity,
              "crew": sorted(by_slot.get(sl.id, []), key=lambda x: x["full_name"])} for sl in s_slots]})
     mine = any(a.user_id == actor.user_id for a in assignments)
-    guest_until = None
-    if mine and wd != SATURDAY and actor.home_weekday != wd:
-        guest_until = guest_access_end(day)
+    assigned_outside_home = mine and wd != SATURDAY and actor.home_weekday != wd
     return {"day": day_summary(day, now), "revision": version.revision, "published_at": version.published_at,
-            "shifts": out_shifts, "guest_access_until": guest_until}
+            "shifts": out_shifts, "assigned_outside_home": assigned_outside_home}
 
 
 def board(db: Session, day: ActivityDay, now: datetime) -> dict:
@@ -120,6 +124,7 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
         other_shifts = [s.kind for s in shifts if s.id != shift_id and uid in assigned.get(s.id, {})]
         return _person_out(p, {
             "is_guest": wd != SATURDAY and p.home_weekday != wd,
+            **_home_info(p),
             "source": entry.source if entry else "assigned_only",
             "via_evening": bool(entry and entry.via_evening),
             "arrival_time": entry.arrival_time.strftime("%H:%M") if entry and entry.arrival_time else None,

@@ -252,7 +252,9 @@ def test_direct_guest_addition_creates_confirmation_request(world):
 
 # ---------- published access windows ----------
 
-def test_guest_sees_full_schedule_through_2359_then_loses_it(world, clock):
+def test_assignee_outside_home_day_keeps_the_date_schedule_after_the_shift(world, clock):
+    """Decision 2026-10-16: a recorded assignment to a date grants that date's schedule with no time window
+    (it stays in history). Other dates on the same weekday are not granted."""
     mgr = Client("thu.mgr@x.test")
     b = board(mgr, world.day(THU))
     ev = shift(b, "evening")
@@ -263,14 +265,13 @@ def test_guest_sees_full_schedule_through_2359_then_loses_it(world, clock):
     assert guest.get(f"/api/schedule/{world.day(THU)}").status_code == 404  # not before publication
     publish(mgr, world.day(THU))
     assert crew_ids(guest, world.day(THU)) == {world.uid("mon_vol"), world.uid("thu_youth")}  # full schedule
-    clock.set(at(THU, "23:30"))  # after the 23:00 shift end
+    assert guest.get(f"/api/schedule/{world.day(THU)}").json()["assigned_outside_home"] is True
+    clock.set(at(THU, "23:30"))  # after the shift end
     assert guest.get(f"/api/schedule/{world.day(THU)}").status_code == 200
-    clock.set(at(THU, "23:59"))
+    clock.set(at("2026-10-16", "00:00"))  # after midnight: the old time window used to end access here
     assert guest.get(f"/api/schedule/{world.day(THU)}").status_code == 200
-    clock.set(at("2026-10-16", "00:00"))
-    assert guest.get(f"/api/schedule/{world.day(THU)}").status_code == 404
-    assert all(d["date"] != THU for d in guest.get("/api/schedule").json()["items"])
-    # Personal history remains, without granting the full schedule.
+    assert [d for d in guest.get("/api/schedule").json()["items"] if d["date"] == THU][0]["historical"] is True
+    # Personal history remains.
     assert [h["date"] for h in guest.get("/api/me/history").json()] == [THU]
     # Home-day member keeps permanent access.
     clock.set(at("2027-01-01", "10:00"))

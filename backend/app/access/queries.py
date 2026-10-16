@@ -2,25 +2,17 @@
 reveal more than the matching single-object policy in app.access.policies."""
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, DateTime, and_, cast, exists, extract, false, func, literal, or_, select, true
-
-from app.core.config import get_settings
+from sqlalchemy import ColumnElement, and_, exists, extract, false, or_, true
 
 from app.access.context import Actor
 from app.core.timeutil import SATURDAY
 from app.days.models import ActivityDay
 from app.registration.models import Invitation
 from app.scheduling.models import Assignment
-from app.scheduling.liveness import live_assignment
 
 
 def _weekday_col():
     return extract("dow", ActivityDay.local_date)
-
-
-def _local_midnight_after_col():
-    # (date + 1) at local midnight, converted by PostgreSQL using the tz database (DST-safe).
-    return func.timezone(literal(get_settings().timezone), cast(ActivityDay.local_date + 1, DateTime()))
 
 
 def published_schedule_visible(actor: Actor, now: datetime) -> ColumnElement[bool]:
@@ -34,15 +26,12 @@ def published_schedule_visible(actor: Actor, now: datetime) -> ColumnElement[boo
         clauses.append(_weekday_col().in_(sorted(actor.managed_weekdays)))
     if actor.home_weekday is not None:
         clauses.append(_weekday_col() == actor.home_weekday)
-    guest = and_(
-        literal(now) < _local_midnight_after_col(),
-        exists().where(
-            Assignment.version_id == ActivityDay.latest_published_version_id,
-            Assignment.user_id == actor.user_id,
-            live_assignment(),
-        ),
-    )
-    clauses.append(guest)
+    # A recorded published assignment to THIS date keeps access to that date's schedule (also in history),
+    # with no time limit. Other dates on the same weekday are not granted. Retention ends it (see D-64).
+    clauses.append(exists().where(
+        Assignment.version_id == ActivityDay.latest_published_version_id,
+        Assignment.user_id == actor.user_id,
+    ))
     return and_(published, or_(*clauses))
 
 

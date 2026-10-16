@@ -4,14 +4,16 @@
 Convention: if the actor may not know a resource exists -> 404; if they can see it but may not
 perform the action -> 403. Admin is an audited override of scopes, privacy and time windows, but
 never of scheduling invariants (those are enforced in services and the database)."""
+
+import uuid
 from datetime import datetime
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
 from app.core.errors import forbidden, not_found
-from app.core.timeutil import SATURDAY, local_midnight_after, local_weekday
+from app.core.timeutil import SATURDAY, local_weekday
 from app.days.models import ActivityDay
 from app.registration.models import Invitation
 from app.scheduling.models import Assignment
@@ -76,12 +78,6 @@ def is_published_assignee(db: Session, actor: Actor, day: ActivityDay) -> bool:
     )
 
 
-def guest_access_end(day: ActivityDay) -> datetime:
-    """Ordinary guests see the full date schedule through 23:59 of the date: the exclusive end is
-    the next local midnight (not the 23:00 shift end)."""
-    return local_midnight_after(day.local_date)
-
-
 def can_view_published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
     if not actor.is_active or day.latest_published_version_id is None:
         return False
@@ -92,7 +88,27 @@ def can_view_published_schedule(db: Session, actor: Actor, day: ActivityDay, now
         return True  # Saturday published schedules: all active volunteers
     if actor.home_weekday == weekday:
         return True  # current home-day members: permanent
-    return now < guest_access_end(day) and is_published_assignee(db, actor, day)
+    # Assigned to this date (recorded assignment): access does not expire with a time window.
+    return is_published_assignee(db, actor, day)
+
+
+def can_view_profile(db: Session, actor: Actor, user_id: uuid.UUID) -> bool:
+    """Personal profile (name, level, home day, contact). Self, Admin and Youth Manager always; a Day Manager
+    only for people registered or assigned on a date they manage. Anyone else gets not-found."""
+    from app.registration.models import Registration
+    from app.scheduling.models import Assignment
+    from sqlalchemy import extract
+    if not actor.is_active:
+        return False
+    if actor.user_id == user_id or actor.is_admin or actor.is_youth_manager:
+        return True
+    if not actor.managed_weekdays:
+        return False
+    dow = extract("dow", ActivityDay.local_date).in_(sorted(actor.managed_weekdays))
+    on_registration = exists().where(Registration.user_id == user_id, Registration.activity_day_id == ActivityDay.id)
+    on_schedule = exists().where(Assignment.version_id == ActivityDay.latest_published_version_id,
+                                 Assignment.user_id == user_id)
+    return db.scalar(select(ActivityDay.id).where(dow, or_(on_registration, on_schedule)).limit(1)) is not None
 
 
 def has_open_invitation(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:

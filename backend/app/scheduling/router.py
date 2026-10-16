@@ -99,6 +99,22 @@ def my_next_assignment(actor: Actor = Depends(get_active_actor), db: Session = D
     return {"assignment": cancellations.next_assignment(db, actor, now)}
 
 
+@router.get("/people/{user_id}")
+def person_profile(user_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db)):
+    """A volunteer's personal profile, for the viewers allowed by app.access.policies.can_view_profile."""
+    from app.access.policies import can_view_profile
+    from app.accounts.models import User
+    from app.core.timeutil import WEEKDAY_NAMES_HE
+    from app.scheduling.pool import people
+    if db.get(User, user_id) is None or not can_view_profile(db, actor, user_id):
+        raise not_found("profile_not_found", "הפרופיל לא נמצא")
+    p = people(db, {user_id})[user_id]
+    wd = p.home_weekday
+    return {"id": str(user_id), "full_name": p.full_name, "level": p.level,
+            "home_weekday": wd, "home_weekday_name": WEEKDAY_NAMES_HE[wd] if wd is not None else None,
+            "phone": p.phone}
+
+
 @router.get("/me/history")
 def history(actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db)):
     return views.my_history(db, actor)
@@ -199,6 +215,18 @@ def day_registrations(day_id: uuid.UUID, actor: Actor = Depends(get_active_actor
 def publish(day_id: uuid.UUID, body: PublishIn, actor: Actor = Depends(get_active_actor),
             db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
     return service.publish(db, actor, day_id, body.draft_id, body.expected_edit_count, now)
+
+
+class ShiftTypeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str = Field(pattern="^(morning|reinforcement)$")  # evening always exists
+
+
+@manage.post("/days/{day_id}/shifts", status_code=201)
+def add_shift_type(day_id: uuid.UUID, body: ShiftTypeIn, actor: Actor = Depends(get_active_actor),
+                   db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    shift = service.add_shift_type(db, actor, day_id, body.kind, now)
+    return {"id": str(shift.id), "kind": shift.kind}
 
 
 @manage.post("/days/{day_id}/invitations", status_code=201)

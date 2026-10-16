@@ -5,6 +5,7 @@ import { AuthProvider, isManager, useAuth } from "./auth";
 import { Login, Pending, Signup } from "./pages/Auth";
 import { History, Home, RegisterDay, ScheduleList, ScheduleView } from "./pages/Volunteer";
 import { BoardPage, ManageDays } from "./pages/manage/Manage";
+import { ProfilePage } from "./pages/Profile";
 import { JournalPage, ManagerTrainees, MentorHome, NotesPage, NotificationsHelp, OfflineHome } from "./pages/Journal";
 import { AdminAudit, AdminCalendar, AdminOutbox, AdminUsers, YouthManager } from "./pages/admin/Admin";
 import "./styles.css";
@@ -43,6 +44,7 @@ function App() {
       <Route path="/mentor" element={<Guard><MentorHome /></Guard>} />
       <Route path="/notes" element={<Guard><NotesPage /></Guard>} />
       <Route path="/notifications" element={<Guard><NotificationsHelp /></Guard>} />
+      <Route path="/people/:userId" element={<Guard><ProfilePage /></Guard>} />
       <Route path="/manage/trainees" element={<Guard need="staff"><ManagerTrainees /></Guard>} />
       <Route path="/manage" element={<Guard need="manager"><ManageDays /></Guard>} />
       <Route path="/manage/:dayId" element={<Guard need="manager"><BoardPage /></Guard>} />

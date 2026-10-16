@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type DaySummary, type Level, type ShiftKind } from "../../api";
 import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime } from "../../he";
-import { LevelBadge, Loading, Shell, errorText, useLoad } from "../../ui";
+import { LevelBadge, Loading, Shell, TimeRange, errorText, useLoad } from "../../ui";
 
 export function ManageDays() {
   const days = useLoad(() => api.get<DaySummary[]>("/api/manage/days"));
@@ -31,6 +31,7 @@ export function ManageDays() {
 interface Person {
   user_id: string;
   full_name: string;
+  home_weekday_name?: string | null;
   level: Level | null;
   is_guest: boolean;
   source: string;
@@ -182,11 +183,33 @@ export function BoardPage() {
         </div>
       ))}
 
+      {(() => {
+        // Shift types a date may still add (decision 2026-10-16). Evening always exists; special days have no reinforcement.
+        const special = ["friday", "saturday", "holiday", "holiday_eve"].includes(board.day.kind);
+        const allowed: ShiftKind[] = special ? ["morning", "evening"] : ["morning", "reinforcement", "evening"];
+        const missing = allowed.filter((k) => !board.shifts.some((sh) => sh.kind === k));
+        if (missing.length === 0) return null;
+        return (
+          <section className="card stack">
+            <strong>הוספת סוג משמרת</strong>
+            <span className="muted">אפשר להוסיף אחרי פתיחת ההרשמה, גם אחרי פרסום. המשמרת לא פותחת הרשמה מחדש ולא מאפשרת בקשות הצטרפות. משבצים ישירות. מתנדבי היום הביתי יקבלו הודעה.</span>
+            <div className="row">
+              {missing.map((k) => (
+                <button key={k} className="btn small" onClick={() => act(
+                  () => api.post(`/api/manage/days/${dayId}/shifts`, { kind: k }), `נוספה משמרת ${SHIFT[k]}`)}>
+                  + משמרת {SHIFT[k]}
+                </button>
+              ))}
+            </div>
+          </section>
+        );
+      })()}
+
       {board.shifts.map((sh) => (
         <div key={sh.id} className="card stack">
           <div className="row spread">
             <h3>{SHIFT[sh.kind]}</h3>
-            <span className="muted">{fmtTime(sh.starts_at)}–{fmtTime(sh.ends_at)} · הגעה {fmtTime(sh.arrival_at)}</span>
+            <span className="muted"><TimeRange from={sh.starts_at} to={sh.ends_at} /> · הגעה {fmtTime(sh.arrival_at)}</span>
           </div>
           {sh.registration_toggle && (
             // Sunday–Friday morning: hidden from volunteer registration until opened here.
@@ -202,6 +225,10 @@ export function BoardPage() {
             </div>
           )}
 
+          {sh.slots.length > 0 && sh.slots.every((sl) => sl.crew.length === 0) && (
+            // Compact empty state: the shift stays open and its controls stay below.
+            <span className="muted compact-empty">אין משובצים במשמרת זו עדיין</span>
+          )}
           {sh.slots.map((sl) => (
             <div key={sl.slot_key} className={`slot ${sl.status === "cancelled" ? "cancelled" : ""}`}>
               <div className="row spread">
@@ -309,9 +336,10 @@ function reorder(list: Person[], from: number, to: number): string[] {
 function PersonLine({ p }: { p: Person }) {
   return (
     <>
-      <span className="name">{p.full_name}</span>
+      {/* The name opens the volunteer's profile (permissions are checked there). */}
+      <Link className="name person-link" to={`/people/${p.user_id}`}>{p.full_name}</Link>
       <LevelBadge level={p.level} />
-      {p.is_guest && <span className="badge guest">אורח/ת{p.confirmation === "pending" ? " · ממתין לאישור" : p.confirmation === "confirmed" ? " · אישר" : ""}</span>}
+      {p.is_guest && <span className="badge guest">אורח/ת{p.home_weekday_name ? ` · יום ${p.home_weekday_name}` : ""}{p.confirmation === "pending" ? " · ממתין לאישור" : p.confirmation === "confirmed" ? " · אישר" : ""}</span>}
       {p.source === "manager" && <span className="badge">נוסף ע״י אחראי</span>}
       {p.via_evening && <span className="badge">מהרשמת ערב</span>}
       {p.arrival_time && <span className="badge">מגיע {p.arrival_time}</span>}

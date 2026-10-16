@@ -113,6 +113,11 @@ def _ensure_draft_locked(db: Session, day: ActivityDay, actor_id: uuid.UUID | No
         for a in db.scalars(select(Assignment).where(Assignment.version_id == base_id, live_assignment())):
             db.add(Assignment(version_id=draft.id, shift_id=a.shift_id, slot_id=slot_map[a.slot_id],
                               user_id=a.user_id, created_at=a.created_at, created_by_id=a.created_by_id))
+        # A shift type added after the last publication has no ambulances in the base: give it its baseline here.
+        in_base = {s.shift_id for s in db.scalars(select(AmbulanceSlot).where(AmbulanceSlot.version_id == base_id))}
+        for shift in day_shifts(db, day.id):
+            if shift.id not in in_base:
+                _add_baseline_slots(db, draft.id, shift)
     db.flush()
     return draft
 
@@ -454,6 +459,46 @@ def _snapshot(db: Session, version_id: uuid.UUID | None) -> tuple[dict, dict]:
     for a in db.scalars(select(Assignment).where(Assignment.version_id == version_id)):
         people.setdefault(a.shift_id, {})[a.user_id] = key_of[a.slot_id]
     return people, slots
+
+
+def _add_baseline_slots(db: Session, version_id: uuid.UUID, shift: Shift) -> None:
+    for i in range(shift.baseline_slots):
+        db.add(AmbulanceSlot(version_id=version_id, shift_id=shift.id, ordinal=i + 1, capacity=DEFAULT_CAPACITY))
+
+
+def add_shift_type(db: Session, actor: Actor, day_id: uuid.UUID, kind: str, now: datetime) -> Shift:
+    """Adds an allowed shift type to a date (decision 2026-10-16). Allowed after registration opens, including
+    after publication. It never reopens registration or joining: after publication the new type is not
+    self-selectable and volunteers cannot request it. The Day Manager assigns people directly. Published rows
+    are untouched; the working copy gets the type's baseline ambulances. Volunteers of the date's home day are
+    notified."""
+    from app.days.service import allowed_shift_kinds, build_shift, template_for
+    from app.accounts.models import DayMembership
+    day = lock_day(db, day_id)
+    require_manage_day(actor, day)
+    if kind not in allowed_shift_kinds(day.kind):
+        raise bad_request("shift_not_allowed", "סוג המשמרת אינו מותר ליום זה")
+    if db.scalar(select(Shift.id).where(Shift.activity_day_id == day.id, Shift.kind == kind)) is not None:
+        raise conflict("shift_exists", "המשמרת הזו כבר קיימת ביום זה")
+    shift = build_shift(day, template_for(day.kind, kind))
+    if day.latest_published_version_id is not None:
+        shift.self_selectable = False  # publication closes joining; a new type must not open it
+    db.add(shift)
+    db.flush()
+    draft = current_draft(db, day.id)
+    if draft is not None:
+        _add_baseline_slots(db, draft.id, shift)
+    wd = local_weekday(day.local_date)
+    recipients = list(db.scalars(
+        select(User.id).join(DayMembership, DayMembership.user_id == User.id)
+        .where(DayMembership.weekday == wd, DayMembership.valid_to.is_(None), User.status == "active")))
+    enqueue(db, event_type="shift_type_added", recipients=recipients,
+            dedup_prefix=f"shift_added:{shift.id}",
+            payload={"date": day.local_date.isoformat(), "activity_day_id": str(day.id), "shift": kind}, now=now)
+    record(db, actor_id=actor.user_id, action="shift_type_add", object_type="shift", object_id=shift.id, now=now,
+           meta={"date": day.local_date.isoformat(), "kind": kind, "notified": len(recipients)})
+    db.commit()
+    return shift
 
 
 def publish(db: Session, actor: Actor, day_id: uuid.UUID, draft_id: uuid.UUID, expected_edit_count: int,
