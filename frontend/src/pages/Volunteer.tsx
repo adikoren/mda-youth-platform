@@ -41,12 +41,13 @@ interface HistoryItem { activity_day_id: string; date: string; weekday: number; 
 //   הרשמה        — dates with a status chip; outline cards
 type RegStatus = { tone: "todo" | "done" | "no" | "wait" | "late"; label: string };
 
-function regStatus(r: Reg): RegStatus {
+function regStatus(r: Reg, invited = false): RegStatus {
   const yes = r.shifts.filter((s) => s.available).map((s) => SHIFT[s.kind]);
   const answered = r.shifts.some((s) => s.available !== null);
   if (r.window === "not_open") return { tone: "wait", label: "טרם נפתחה" };
   if (yes.length) return { tone: "done", label: `נרשמת · ${yes.join(" + ")}` };
   if (answered) return { tone: "no", label: "סימנת: לא מגיע/ה" };
+  if (invited) return { tone: "todo", label: "הוזמנת להירשם" };
   if (r.window === "closed_late_allowed") return { tone: "late", label: "נסגרה — עדיין אפשר לסמן" };
   return { tone: "todo", label: "טרם סימנת" };
 }
@@ -82,10 +83,11 @@ export function Home() {
   const [allNotes, setAllNotes] = useState(false);
   const today = localToday();
   const upcoming = (history.data ?? []).filter((h) => h.date >= today).reverse();
-  // One action per date: an invitation card already covers its date.
-  const invitedDays = new Set((invites.data ?? []).map((i) => i.activity_day_id));
-  const toAnswer = (regs.data ?? []).filter((r) => needsAnswer(r) && !invitedDays.has(r.activity_day_id));
-  const actionCount = (invites.data ?? []).length + toAnswer.length;
+  // "נדרשת פעולה" holds only distinct tasks. Registration itself (invitations to register, dates still
+  // to answer) lives in "הרשמה למשמרות", so the same date is never shown twice.
+  const directAdds = (invites.data ?? []).filter((i) => i.kind === "direct_add");
+  const invitedDays = new Set((invites.data ?? []).filter((i) => i.kind === "invitation").map((i) => i.activity_day_id));
+  const actionCount = directAdds.length;
 
   async function confirm(id: string) {
     await api.post(`/api/invitations/${id}/confirm`);
@@ -106,31 +108,13 @@ export function Home() {
       {actionCount > 0 && (
         <section className="section">
           <h3 className="section-title">נדרשת פעולה <span className="count">{actionCount}</span></h3>
-          {/* Invitation cards exist only while an active request exists. */}
-          {(invites.data ?? []).map((inv) => (
+          {directAdds.map((inv) => (
             <div key={inv.id} className="action-card">
-              <span className="tag tag-action">{inv.kind === "invitation" ? "הזמנה" : "אישור שיבוץ"}</span>
-              {inv.kind === "invitation" ? (
-                <>
-                  <strong>הוזמנת להירשם ל{dayTitle(inv)}</strong>
-                  <Link className="btn primary block" to={`/register/${inv.activity_day_id}`}>לסימון זמינות</Link>
-                </>
-              ) : (
-                <>
-                  <strong>נוספת למשמרת {inv.shift ? SHIFT[inv.shift] : ""} ב{dayTitle(inv)}</strong>
-                  <span className="muted">האחראי הוסיף אותך. נשמח לאישור שראית.</span>
-                  <button className="btn primary block" onClick={() => confirm(inv.id)}>ראיתי, מאשר/ת</button>
-                </>
-              )}
+              <span className="tag tag-action">אישור שיבוץ</span>
+              <strong>נוספת למשמרת {inv.shift ? SHIFT[inv.shift] : ""} ב{dayTitle(inv)}</strong>
+              <span className="muted">האחראי הוסיף אותך. נשמח לאישור שראית.</span>
+              <button className="btn primary block" onClick={() => confirm(inv.id)}>ראיתי, מאשר/ת</button>
             </div>
-          ))}
-          {toAnswer.map((r) => (
-            <Link key={r.activity_day_id} className="action-card link" to={`/register/${r.activity_day_id}`}>
-              <span className="tag tag-action">הרשמה פתוחה</span>
-              <strong>{dayTitle(r)}</strong>
-              <span className="muted">{r.window === "closed_late_allowed" ? "ההרשמה נסגרה, אבל אפשר עדיין לסמן" : `נסגרת ${fmtShort(r.closes_at)}`}</span>
-              <span className="go">לסימון זמינות ‹</span>
-            </Link>
           ))}
         </section>
       )}
@@ -157,12 +141,14 @@ export function Home() {
         {regs.data?.length === 0 && <div className="empty">אין כרגע תאריכים להרשמה.</div>}
         <div className="reg-list">
           {regs.data?.map((r) => {
-            const st = regStatus(r);
+            const st = regStatus(r, invitedDays.has(r.activity_day_id));
+            const actionable = invitedDays.has(r.activity_day_id) || needsAnswer(r);
             return (
               <Link key={r.activity_day_id} className="reg-row" to={`/register/${r.activity_day_id}`}>
                 <span className="reg-date">
                   <strong>{dayTitle(r)}</strong>
                   <span className="muted">{DAY_KIND[r.kind]}{r.window === "not_open" ? ` · נפתחת ${fmtShort(r.opens_at)}` : ""}</span>
+                  {actionable && <span className="go">להרשמה למשמרת ‹</span>}
                 </span>
                 <span className={`status status-${st.tone}`}>{st.label}</span>
               </Link>
@@ -333,7 +319,7 @@ export function RegisterDay() {
             <span className="shift-time">{fmtTime(s.starts_at)}–{fmtTime(s.ends_at)}</span>
           </div>
           <span className="muted">הגעה {fmtTime(s.arrival_at)}</span>
-          <div className="segmented" role="group" aria-label={`זמינות למשמרת ${SHIFT[s.kind]}`}>
+          <div className="segmented" role="group" aria-label={`הרשמה למשמרת ${SHIFT[s.kind]}`}>
             <button className="seg yes" aria-pressed={s.available === true} disabled={!editable || busy === s.shift_id}
                     onClick={() => save(s, true, s.arrival_time)}>
               <span aria-hidden>✓</span> מגיע/ה

@@ -205,6 +205,8 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Delivery wording:** the screen states that the message is shown to the manager in the app only. No SMS or WhatsApp message is implied; the phone-channel status remains "simulated" until a provider is connected.
   - **Admin:** unchanged. Admin still manages registrations directly.
 
+- **D-55 Volunteer home: no duplicate registration content** (2026-10-16). "נדרשת פעולה" shows only distinct tasks (confirming a manager-added shift), and is hidden when there are none. Invitations to register and dates still to answer appear only in "הרשמה למשמרות", on the date row, with the call to action "להרשמה למשמרת". The registration screen's group label now reads "הרשמה למשמרת …". No change to registration behaviour or permissions.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.
