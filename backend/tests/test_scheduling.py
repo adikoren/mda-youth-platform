@@ -80,9 +80,13 @@ def test_post_publication_draft_edits_have_no_live_effect_until_republished(worl
     assert trainee.get("/api/me/history").json() == []
     unassigned = db.scalars(select(OutboxMessage).where(OutboxMessage.event_type == "unassigned")).all()
     assert [m.recipient_user_id for m in unassigned] == [world.users["thu_trainee"].id]
-    # Removal message carries no schedule content (date and shift kinds only).
-    assert set(unassigned[0].payload) == {"date", "shifts"}
-    assert unassigned[0].payload["shifts"] == [{"shift": "evening", "change": "unassigned"}]
+    # The removal lists the shift it came from. Schedule references are added only because the trainee is
+    # still waiting for another shift of the same date (decision 2026-10-16); a person with no remaining role
+    # on the date gets date and shift kinds only.
+    assert set(unassigned[0].payload) <= {"date", "shifts", "activity_day_id", "revision"}
+    assert {"shift": "evening", "change": "unassigned"} in unassigned[0].payload["shifts"]
+    if "activity_day_id" not in unassigned[0].payload:
+        assert set(unassigned[0].payload) == {"date", "shifts"}
 
 
 def test_republication_creates_new_legitimate_notifications(world, db):

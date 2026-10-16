@@ -14,11 +14,11 @@ from app.access.dependencies import get_active_actor, now_dep
 from app.core.db import get_db
 from app.core.errors import not_found
 from app.core.timeutil import local_today
-from app.days.models import ActivityDay
+from app.days.models import ActivityDay, Shift
 from app.notifications.models import OutboxMessage
 from app.notifications.outbox import EVENT_TEXT_HE
 from app.registration import service as registration_service
-from app.scheduling import service, views
+from app.scheduling import cancellations, service, views
 
 router = APIRouter(prefix="/api", tags=["schedule"])
 
@@ -40,7 +40,16 @@ def visible_schedules(start: date | None = None, end: date | None = None, actor:
     days = list(db.scalars(select(ActivityDay).where(pred, ActivityDay.local_date.between(start, end))
                            .order_by(ActivityDay.local_date)))
     total = db.scalar(select(func.count()).select_from(ActivityDay).where(pred))
-    return {"items": [views.day_summary(d, now) for d in days], "total_visible": total}
+    # Historical = every shift of the date has ended (server time). Automatic: no manual archiving.
+    last_end = dict(db.execute(select(Shift.activity_day_id, func.max(Shift.ends_at))
+                               .where(Shift.activity_day_id.in_([d.id for d in days]))
+                               .group_by(Shift.activity_day_id)).all())
+    items = []
+    for d in days:
+        item = views.day_summary(d, now)
+        item["historical"] = last_end.get(d.id) is not None and last_end[d.id] <= now
+        items.append(item)
+    return {"items": items, "total_visible": total}
 
 
 @router.get("/schedule/{day_id}")
@@ -59,11 +68,35 @@ def day_requests(day_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db
     return registration_service.day_requests(db, actor, service.get_day(db, day_id))
 
 
-@router.post("/manage/requests/{request_id}/resolve")
-def resolve_request(request_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
-                    now: datetime = Depends(now_dep)):
-    registration_service.resolve_request(db, actor, request_id, now)
+class DecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: str = Field(pattern="^(approved|rejected)$")
+
+
+@router.post("/manage/requests/{request_id}/decision")
+def decide_request(request_id: uuid.UUID, body: DecisionIn, actor: Actor = Depends(get_active_actor),
+                   db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    """Day Manager (or Admin) approves or rejects a volunteer's request. Publication waits for this."""
+    registration_service.decide_request(db, actor, request_id, body.decision, now)
     return {"ok": True}
+
+
+@router.post("/shifts/{shift_id}/cancel")
+def cancel_my_shift(shift_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
+                    now: datetime = Depends(now_dep)):
+    """Volunteer cancels their own registration or assignment for one shift. Allowed only before the
+    shift starts (server time); no approval needed. See app.scheduling.cancellations."""
+    shift = db.get(Shift, shift_id)
+    if shift is None:
+        raise not_found("shift_not_found", "המשמרת לא נמצאה")
+    return cancellations.volunteer_cancel(db, actor, shift, now)
+
+
+@router.get("/me/next-assignment")
+def my_next_assignment(actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
+                       now: datetime = Depends(now_dep)):
+    """The nearest live published assignment that has not ended (an active shift counts), or null."""
+    return {"assignment": cancellations.next_assignment(db, actor, now)}
 
 
 @router.get("/me/history")

@@ -35,6 +35,7 @@ from app.mentoring.models import (
     RideContributor,
 )
 from app.scheduling.models import Assignment
+from app.scheduling.liveness import live_assignment
 
 WINDOW_CLOSED = "חלון התיעוד נסגר. הטיוטה נשמרה במכשיר — אפשר לבקש מהאחראי לפתוח גישה מחדש"
 RIDE_CANCELLED = "הנסיעה בוטלה על ידי האחראי (למשל ככפולה). הטיוטה נשמרה במכשיר"
@@ -60,7 +61,7 @@ def _published_assigned(db: Session, user_id: uuid.UUID, shift: Shift, day: Acti
         return False
     return db.scalar(select(Assignment.id).where(Assignment.version_id == day.latest_published_version_id,
                                                  Assignment.shift_id == shift.id,
-                                                 Assignment.user_id == user_id)) is not None
+                                                 Assignment.user_id == user_id, live_assignment())) is not None
 
 
 def _touch_contributor(db: Session, ride_id: uuid.UUID, user_id: uuid.UUID, now: datetime) -> None:
@@ -421,7 +422,7 @@ def journal_view(db: Session, actor: Actor, trainee_id: uuid.UUID, now: datetime
         shift_ids |= set(db.scalars(select(Assignment.shift_id).join(Shift, Shift.id == Assignment.shift_id)
                                     .join(ActivityDay, (ActivityDay.id == Shift.activity_day_id)
                                           & (ActivityDay.latest_published_version_id == Assignment.version_id))
-                                    .where(Assignment.user_id == trainee_id)))
+                                    .where(Assignment.user_id == trainee_id, live_assignment())))
     shift_rows = {s.id: (s, d) for s, d in db.execute(
         select(Shift, ActivityDay).join(ActivityDay, ActivityDay.id == Shift.activity_day_id)
         .where(Shift.id.in_(shift_ids))).all()} if shift_ids else {}
@@ -507,7 +508,7 @@ def my_documentable_shifts(db: Session, actor: Actor, now: datetime) -> list[dic
     rows = db.execute(select(Shift, ActivityDay).join(ActivityDay, ActivityDay.id == Shift.activity_day_id)
                       .join(Assignment, (Assignment.shift_id == Shift.id)
                             & (Assignment.version_id == ActivityDay.latest_published_version_id))
-                      .where(Assignment.user_id == actor.user_id)
+                      .where(Assignment.user_id == actor.user_id, live_assignment())
                       .order_by(ActivityDay.local_date.desc()).limit(10)).all()
     return [{"shift_id": str(s.id), "kind": s.kind, "date": d.local_date.isoformat(),
              "weekday": local_weekday(d.local_date)}

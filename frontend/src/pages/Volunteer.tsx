@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
-import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDM, fmtDateTime, fmtTime, localToday, phoneStatus } from "../he";
+import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDM, fmtDateTime, fmtTime, phoneStatus } from "../he";
 import { LevelBadge, Loading, Shell, errorText, useLoad } from "../ui";
 import { newRideId } from "../offline";
 import { NotificationNotice } from "./Journal";
@@ -36,6 +36,10 @@ interface Reg {
 interface Invitation { id: string; kind: "invitation" | "direct_add"; activity_day_id: string; date: string; weekday: number; shift: ShiftKind | null }
 interface Note { id: string; text: string; created_at: string; read: boolean; phone_status: string; payload: { date?: string; shifts?: { shift: ShiftKind; change: string }[] } }
 interface HistoryItem { activity_day_id: string; date: string; weekday: number; shift: ShiftKind; starts_at: string; ends_at: string; ambulance: number }
+interface NextAssignment {
+  activity_day_id: string; shift_id: string; date: string; weekday: number; kind: ShiftKind;
+  starts_at: string; ends_at: string; ambulance: number; state: "before" | "started" | "ended"; cancellable: boolean;
+}
 
 // ---- volunteer home ----
 // Three kinds of content, kept visually distinct (and never by colour alone):
@@ -76,11 +80,10 @@ export function Home() {
   const { me } = useAuth();
   const regs = useLoad(() => api.get<Reg[]>("/api/registrations"));
   const invites = useLoad(() => api.get<Invitation[]>("/api/invitations"));
-  const history = useLoad(() => api.get<HistoryItem[]>("/api/me/history"));
+  const next = useLoad(() => api.get<{ assignment: NextAssignment | null }>("/api/me/next-assignment"));
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const notes = useLoad(() => api.get<Note[]>("/api/me/notifications?limit=10", true));
   const [allNotes, setAllNotes] = useState(false);
-  const today = localToday();
-  const upcoming = (history.data ?? []).filter((h) => h.date >= today).reverse();
   // "נדרשת פעולה" holds only distinct tasks. Registration itself (invitations to register, dates still
   // to answer) lives in "הרשמה למשמרות", so the same date is never shown twice.
   const directAdds = (invites.data ?? []).filter((i) => i.kind === "direct_add");
@@ -90,6 +93,18 @@ export function Home() {
   async function confirm(id: string) {
     await api.post(`/api/invitations/${id}/confirm`);
     invites.reload();
+  }
+
+  // The server decides whether the shift has started; a refusal here only means the screen was stale.
+  async function cancelShift(shiftId: string) {
+    setCancelError(null);
+    try {
+      await api.post(`/api/shifts/${shiftId}/cancel`, {});
+    } catch (e) {
+      setCancelError(errorText(e));
+    }
+    next.reload();
+    regs.reload();
   }
 
   return (
@@ -118,19 +133,27 @@ export function Home() {
       )}
 
       <section className="section">
-        <h3 className="section-title">השיבוצים שלי</h3>
-        {history.data && upcoming.length === 0 && <div className="empty">אין שיבוצים קרובים שפורסמו.</div>}
-        {upcoming.map((h) => (
-          <Link key={h.activity_day_id + h.shift} className="assign-card" to={`/schedule/${h.activity_day_id}`}>
-            <span className="amb" aria-label={`אמבולנס ${h.ambulance}`}><small>אמבולנס</small>{h.ambulance}</span>
-            <span className="assign-body">
-              <span className="tag tag-published">שובצת · פורסם</span>
-              <strong>{dayTitle(h)}</strong>
-              <span className="muted">משמרת {SHIFT[h.shift]} · {fmtTime(h.starts_at)}–{fmtTime(h.ends_at)}</span>
+        <h3 className="section-title">השיבוץ הבא שלי</h3>
+        {next.data && !next.data.assignment && (
+          <div className="empty">מתי המשמרת הבאה שלך? מתגעגעים אליך בתחנה ❤️</div>
+        )}
+        {next.data?.assignment && (
+          <div className="assign-card">
+            <span className="amb" aria-label={`אמבולנס ${next.data.assignment.ambulance}`}>
+              <small>אמבולנס</small>{next.data.assignment.ambulance}
             </span>
-            <span className="chev" aria-hidden>‹</span>
-          </Link>
-        ))}
+            <span className="assign-body">
+              <span className="tag tag-published">{next.data.assignment.state === "started" ? "המשמרת מתבצעת" : "שובצת · פורסם"}</span>
+              <strong>{dayTitle(next.data.assignment)}</strong>
+              <span className="muted">משמרת {SHIFT[next.data.assignment.kind]} · {fmtTime(next.data.assignment.starts_at)}–{fmtTime(next.data.assignment.ends_at)}</span>
+              <Link className="btn small" to={`/schedule/${next.data.assignment.activity_day_id}`}>לצפייה בסידור</Link>
+              {next.data.assignment.cancellable && (
+                <button className="btn small ghost" onClick={() => cancelShift(next.data!.assignment!.shift_id)}>ביטול שיבוץ</button>
+              )}
+            </span>
+          </div>
+        )}
+        {cancelError && <div className="error">{cancelError}</div>}
       </section>
 
       <section className="section">
@@ -213,6 +236,22 @@ export function RegisterDay() {
   const [reqErr, setReqErr] = useState<string | null>(null);
   const [reqShift, setReqShift] = useState<string>("");
   const [reqDuplicate, setReqDuplicate] = useState(false); // an identical request is still pending
+
+  // Volunteer cancellation before the shift starts; no approval. The server refuses at or after the start, so a
+  // screen opened before the start cannot cancel late: the refusal is shown and the page reloads.
+  async function cancelMine(s: RegShift) {
+    setBusy(s.shift_id);
+    setErr(null);
+    try {
+      await api.post(`/api/shifts/${s.shift_id}/cancel`, {});
+      setSaved(null);
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setBusy(null);
+      reg.reload();
+    }
+  }
 
   function openRequest() {
     setReqDuplicate(false);
@@ -372,6 +411,10 @@ export function RegisterDay() {
             </button>
           </div>
           )}
+          {s.state === "before" && s.available === true && (
+            <button className="btn ghost small" disabled={busy === s.shift_id}
+                    onClick={() => cancelMine(s)}>ביטול הרשמה למשמרת</button>
+          )}
           {canAnswer(s) && s.allows_late_arrival && s.available && (
             lateOpen || s.arrival_time ? (
               <label className="field">
@@ -409,18 +452,30 @@ interface PubSchedule {
             slots: { slot_key: string; ordinal: number; crew: PubPerson[] }[] }[];
 }
 
+// Active schedules first (nearest date first), then history (most recent first). A date becomes historical
+// automatically once all its shifts have ended (server time), so nothing is archived by hand.
 export function ScheduleList() {
-  const list = useLoad(() => api.get<{ items: DaySummary[] }>("/api/schedule"));
+  const list = useLoad(() => api.get<{ items: (DaySummary & { historical: boolean })[] }>("/api/schedule"));
+  const items = list.data?.items ?? [];
+  const active = items.filter((d) => !d.historical).sort((a, b) => a.date.localeCompare(b.date));
+  const history = items.filter((d) => d.historical).sort((a, b) => b.date.localeCompare(a.date));
+  const row = (d: DaySummary) => (
+    <Link key={d.id} to={`/schedule/${d.id}`} className="card list-link">
+      <span><strong>סידור לתאריך {fmtDM(d.date)}</strong> <span className="muted">{WEEKDAYS[d.weekday]}</span></span>
+      <span className="muted">{DAY_KIND[d.kind]} ›</span>
+    </Link>
+  );
   return (
-    <Shell title="סידור">
+    <Shell title="סידורים">
       {!list.data && <Loading error={list.error} />}
-      {list.data?.items.length === 0 && <div className="card muted">אין סידורים מפורסמים שזמינים לך כרגע.</div>}
-      {list.data?.items.map((d) => (
-        <Link key={d.id} to={`/schedule/${d.id}`} className="card list-link">
-          <span><strong>{fmtDM(d.date)}</strong> <span className="muted">{WEEKDAYS[d.weekday]}</span></span>
-          <span className="muted">{DAY_KIND[d.kind]} ›</span>
-        </Link>
-      ))}
+      {list.data && items.length === 0 && <div className="card muted">אין סידורים מפורסמים שזמינים לך כרגע.</div>}
+      {active.map(row)}
+      {history.length > 0 && (
+        <section className="section">
+          <h3 className="section-title">היסטוריית סידורים</h3>
+          {history.map(row)}
+        </section>
+      )}
     </Shell>
   );
 }

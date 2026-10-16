@@ -17,6 +17,7 @@ EVENT_TEXT_HE = {
     "registration_opened": "ההרשמה נפתחה",
     "late_registration": "שינוי הרשמה אחרי מועד הסגירה",
     "registration_request": "בקשה מחניך/מתנדב לגבי הרשמה ליום",
+    "volunteer_cancelled": "מתנדב ביטל את השיבוץ שלו למשמרת (לידיעתך בלבד)",
     "availability_withdrawn": "ביטל זמינות — נדרש טיפול",
     "schedule_published": "הסידור פורסם",
     "assigned": "שובצת למשמרת",

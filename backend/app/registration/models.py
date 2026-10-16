@@ -119,13 +119,17 @@ class AvailabilityAttention(Base):
     resolution: Mapped[str | None] = mapped_column(String(32))
 
 
+# pending until the Day Manager decides. "resolved" is the legacy "handled" from before decisions existed.
+REQUEST_STATUSES = ("pending", "approved", "rejected", "resolved")
+
+
 class RegistrationRequest(Base):
     """A volunteer's written request to the day manager after registration closed (the 'שליחת בקשה
     לאחראי' form). Submitted only by an explicit button press; never created by opening the tab.
     The text stays here; notification payloads carry ids only (DECISIONS D-26)."""
 
     __tablename__ = "registration_requests"
-    __table_args__ = (CheckConstraint(check_in("status", ("pending", "resolved")), name="status"),)
+    __table_args__ = (CheckConstraint(check_in("status", REQUEST_STATUSES), name="status"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()  # client-generated, so a retried submit is recognised
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)

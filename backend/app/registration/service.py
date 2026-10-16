@@ -3,7 +3,7 @@ saved, flagged late and notify the day's managers. Nothing here changes a publis
 import uuid
 from datetime import datetime, time
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,8 @@ from app.days.models import ActivityDay, Shift
 from app.notifications.outbox import day_manager_ids, enqueue
 from app.registration.models import AvailabilityAttention, Invitation, Registration, RegistrationChoice, RegistrationRequest
 from app.scheduling.models import Assignment
+from app.scheduling.liveness import live_assignment
+from app.scheduling.service import lock_day
 
 
 def shift_state(shift: Shift, now: datetime) -> str:
@@ -178,7 +180,7 @@ def _flag_withdrawals(db, actor, day, reg, withdrawn, managers, payload, now) ->
         return
     assigned_shifts = set(db.scalars(select(Assignment.shift_id).where(
         Assignment.version_id == day.latest_published_version_id, Assignment.user_id == actor.user_id,
-        Assignment.shift_id.in_(withdrawn))))
+        Assignment.shift_id.in_(withdrawn), live_assignment())))
     for shift_id in assigned_shifts:
         db.execute(insert(AvailabilityAttention).values(
             id=uuid.uuid4(), shift_id=shift_id, user_id=actor.user_id,
@@ -231,12 +233,17 @@ def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid
     does not create a second request, unless the volunteer confirms it (confirm_duplicate)."""
     if not can_register_for_day(db, actor, day, now):
         raise not_found("day_not_found", "היום לא נמצא")
+    # Serialise with publication: a request either lands before the publication check (which then waits
+    # for its decision) or is refused because the schedule is already published.
+    day = lock_day(db, day.id)
     existing = db.get(RegistrationRequest, request_id)
     if existing is not None:
         if existing.user_id == actor.user_id and existing.activity_day_id == day.id:
             db.rollback()
             return existing, False
         raise conflict("request_id_conflict", "מזהה הבקשה כבר בשימוש")
+    if day.latest_published_version_id is not None:
+        raise conflict("schedule_published", "הסידור כבר פורסם. אי אפשר לשלוח בקשה להצטרפות")
     state = window_state(day, now)
     if state == "not_open":
         raise conflict("registration_not_open", "ההרשמה ליום זה עוד לא נפתחה")
@@ -284,21 +291,30 @@ def day_requests(db: Session, actor: Actor, day: ActivityDay) -> list[dict]:
     require_manage_day(actor, day)
     rows = db.execute(select(RegistrationRequest, User.full_name).join(User, User.id == RegistrationRequest.user_id)
                       .where(RegistrationRequest.activity_day_id == day.id)
-                      .order_by((RegistrationRequest.status == "resolved"), RegistrationRequest.created_at)).all()
+                      .order_by((RegistrationRequest.status != "pending"), RegistrationRequest.created_at)).all()
     kinds = {s.id: s.kind for s in db.scalars(select(Shift).where(Shift.activity_day_id == day.id))}
     return [{"id": str(r.id), "user_id": str(r.user_id), "full_name": name, "message": r.message,
              "shift": kinds.get(r.shift_id), "status": r.status, "created_at": r.created_at,
              "resolved_at": r.resolved_at} for r, name in rows]
 
 
-def resolve_request(db: Session, actor: Actor, request_id: uuid.UUID, now: datetime) -> None:
+def decide_request(db: Session, actor: Actor, request_id: uuid.UUID, decision: str, now: datetime) -> None:
+    """The Day Manager (or Admin) approves or rejects a request. A decision never registers or assigns
+    anyone; it only unblocks publication. Viewing a request does not decide it."""
     req = db.get(RegistrationRequest, request_id)
     if req is None:
         raise not_found("request_not_found", "הבקשה לא נמצאה")
-    day = db.get(ActivityDay, req.activity_day_id)
+    day = lock_day(db, req.activity_day_id)
     require_manage_day(actor, day)
-    if req.status == "pending":
-        req.status, req.resolved_at, req.resolved_by_id = "resolved", now, actor.user_id
-        record(db, actor_id=actor.user_id, action="registration_request_resolve", object_type="registration_request",
-               object_id=req.id, now=now)
+    if req.status != "pending":
+        db.rollback()
+        return  # already decided: a repeated click changes nothing
+    req.status, req.resolved_at, req.resolved_by_id = decision, now, actor.user_id
+    record(db, actor_id=actor.user_id, action=f"registration_request_{decision}", object_type="registration_request",
+           object_id=req.id, now=now)
     db.commit()
+
+
+def pending_request_count(db: Session, day_id: uuid.UUID) -> int:
+    return db.scalar(select(func.count()).select_from(RegistrationRequest).where(
+        RegistrationRequest.activity_day_id == day_id, RegistrationRequest.status == "pending")) or 0

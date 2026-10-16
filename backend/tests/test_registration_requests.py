@@ -117,12 +117,12 @@ def test_only_the_day_managers_see_and_resolve_requests(world, db, clock):
     # Other managers, the volunteers and the youth manager (no day scope) do not see the text.
     assert Client("sat.mgr@x.test").get(f"/api/manage/days/{world.day(THU)}/requests").status_code == 404
     assert Client("thu.youth@x.test").get(f"/api/manage/days/{world.day(THU)}/requests").status_code == 404
-    assert Client("sat.mgr@x.test").post(f"/api/manage/requests/{rid}/resolve").status_code == 404
+    assert Client("sat.mgr@x.test").post(f"/api/manage/requests/{rid}/decision", {"decision": "approved"}).status_code == 404
     # Resolving marks it handled; it stays listed for review (not deleted).
-    assert mgr.post(f"/api/manage/requests/{rid}/resolve").status_code == 200
+    assert mgr.post(f"/api/manage/requests/{rid}/decision", {"decision": "approved"}).status_code == 200
     listed = mgr.get(f"/api/manage/days/{world.day(THU)}/requests").json()
-    assert [(x["id"], x["status"]) for x in listed] == [(rid, "resolved")] and listed[0]["resolved_at"]
-    assert db.scalar(text(f"select status from registration_requests where id = '{rid}'")) == "resolved"
+    assert [(x["id"], x["status"]) for x in listed] == [(rid, "approved")] and listed[0]["resolved_at"]
+    assert db.scalar(text(f"select status from registration_requests where id = '{rid}'")) == "approved"
 
 
 def test_admin_can_submit_and_still_manages_registration_directly(world, db, clock):
@@ -167,7 +167,7 @@ def test_identical_text_is_allowed_again_once_the_first_is_handled(world, db, cl
     clock.set(at(CLOSED, "12:00"))
     vol, mgr = Client("thu.youth@x.test"), Client("thu.mgr@x.test")
     rid, _ = submit(vol, world, message="בקשה חוזרת")
-    assert mgr.post(f"/api/manage/requests/{rid}/resolve").status_code == 200
+    assert mgr.post(f"/api/manage/requests/{rid}/decision", {"decision": "approved"}).status_code == 200
     _, again = submit(vol, world, message="בקשה חוזרת")  # a new issue, after the first was handled
     assert again.status_code == 201
 

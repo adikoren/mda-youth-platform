@@ -34,6 +34,7 @@ class ScheduleVersion(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     activity_day_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activity_days.id"), index=True)
     revision: Mapped[int] = mapped_column(Integer)
+    purged_at: Mapped[datetime | None] = tstz(nullable=True)  # set when retention deleted this version's rows
     status: Mapped[str] = mapped_column(String(16), default="draft")
     base_published_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("schedule_versions.id"))
     created_at: Mapped[datetime] = tstz()
@@ -88,3 +89,18 @@ class Assignment(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = tstz()
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+
+
+class AssignmentCancellation(Base):
+    """A volunteer cancelled their own published assignment (before the shift starts). The published
+    version itself stays immutable (its rows are history); this row takes the person out of every live
+    view of that version at once. Cleared by the next publication, which rebuilds the crew without them."""
+
+    __tablename__ = "assignment_cancellations"
+    __table_args__ = (UniqueConstraint("version_id", "shift_id", "user_id"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schedule_versions.id"), index=True)
+    shift_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shifts.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    cancelled_at: Mapped[datetime] = tstz()

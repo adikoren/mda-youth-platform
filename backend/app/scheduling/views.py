@@ -13,6 +13,7 @@ from app.days.models import ActivityDay, Shift
 from app.registration.models import AvailabilityAttention, Invitation, Registration, RegistrationChoice
 from app.registration.service import window_state
 from app.scheduling.models import AmbulanceSlot, Assignment, ScheduleVersion
+from app.scheduling.liveness import live_assignment
 from app.scheduling.pool import assigned_by_shift, ordered, people, shift_pools
 from app.scheduling.service import MAX_CAPACITY, current_draft, day_shifts
 
@@ -53,7 +54,7 @@ def published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetim
     slots = list(db.scalars(select(AmbulanceSlot).where(AmbulanceSlot.version_id == version.id,
                                                         AmbulanceSlot.status == "active")
                             .order_by(AmbulanceSlot.ordinal)))
-    assignments = list(db.scalars(select(Assignment).where(Assignment.version_id == version.id)))
+    assignments = list(db.scalars(select(Assignment).where(Assignment.version_id == version.id, live_assignment())))
     info = people(db, {a.user_id for a in assignments})
     wd = local_weekday(day.local_date)
     by_slot: dict[uuid.UUID, list] = {}
@@ -175,7 +176,7 @@ def my_history(db: Session, actor: Actor, until: date | None = None) -> list[dic
          .join(Assignment, Assignment.version_id == ActivityDay.latest_published_version_id)
          .join(Shift, Shift.id == Assignment.shift_id)
          .join(AmbulanceSlot, AmbulanceSlot.id == Assignment.slot_id)
-         .where(Assignment.user_id == actor.user_id)
+         .where(Assignment.user_id == actor.user_id, live_assignment())
          .order_by(ActivityDay.local_date.desc(), Shift.starts_at))
     return [{"activity_day_id": str(d.id), "date": d.local_date.isoformat(), "weekday": local_weekday(d.local_date),
              "weekday_name": WEEKDAY_NAMES_HE[local_weekday(d.local_date)], "kind": d.kind, "shift": s.kind,

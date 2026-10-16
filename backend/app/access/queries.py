@@ -11,6 +11,7 @@ from app.core.timeutil import SATURDAY
 from app.days.models import ActivityDay
 from app.registration.models import Invitation
 from app.scheduling.models import Assignment
+from app.scheduling.liveness import live_assignment
 
 
 def _weekday_col():
@@ -38,6 +39,7 @@ def published_schedule_visible(actor: Actor, now: datetime) -> ColumnElement[boo
         exists().where(
             Assignment.version_id == ActivityDay.latest_published_version_id,
             Assignment.user_id == actor.user_id,
+            live_assignment(),
         ),
     )
     clauses.append(guest)

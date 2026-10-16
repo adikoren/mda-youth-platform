@@ -28,6 +28,7 @@ from app.registration.models import (
     QueueOrder,
 )
 from app.scheduling.models import AmbulanceSlot, Assignment, ScheduleVersion
+from app.scheduling.liveness import live_assignment
 from app.scheduling.pool import assigned_by_shift, shift_pools
 
 DEFAULT_CAPACITY = 3
@@ -108,7 +109,8 @@ def _ensure_draft_locked(db: Session, day: ActivityDay, actor_id: uuid.UUID | No
             slot_map[s.id] = new.id
             db.add(new)
         db.flush()
-        for a in db.scalars(select(Assignment).where(Assignment.version_id == base_id)):
+        # A volunteer who cancelled on the base version is not carried into the new working copy.
+        for a in db.scalars(select(Assignment).where(Assignment.version_id == base_id, live_assignment())):
             db.add(Assignment(version_id=draft.id, shift_id=a.shift_id, slot_id=slot_map[a.slot_id],
                               user_id=a.user_id, created_at=a.created_at, created_by_id=a.created_by_id))
     db.flush()
@@ -470,6 +472,13 @@ def publish(db: Session, actor: Actor, day_id: uuid.UUID, draft_id: uuid.UUID, e
                        {"edit_count": version.edit_count})
     if day.latest_published_version_id is not None and version.edit_count == 0:
         raise conflict("nothing_to_publish", "אין שינויים לפרסום")
+    # Requests must be decided first: approve or reject every pending request (decisions do not assign anyone).
+    from app.registration.service import pending_request_count
+    pending = pending_request_count(db, day.id)
+    if pending:
+        raise conflict("pending_requests",
+                       f"לא ניתן לפרסם: יש {pending} בקשות להרשמה שממתינות להחלטה. יש לאשר או לדחות כל בקשה לפני הפרסום",
+                       {"pending": pending})
 
     # Re-validate hard invariants on the whole draft (defence in depth beyond per-edit checks).
     shifts = {s.id: s for s in day_shifts(db, day.id)}
@@ -515,28 +524,40 @@ _EVENT_FOR_CHANGE = {
 _PRIORITY = list(_EVENT_FOR_CHANGE)
 
 
+def _day_schedule_changed(shifts, new_people, old_people, new_slots, old_slots) -> bool:
+    """True if any shift of the date gained, lost or moved an assignment, or changed its ambulance slots."""
+    for shift_id in shifts:
+        new_map, old_map = new_people.get(shift_id, {}), old_people.get(shift_id, {})
+        if set(new_map) != set(old_map):
+            return True
+        if any(new_map[u] != old_map[u] for u in new_map):
+            return True
+        if set(new_slots.get(shift_id, {})) != set(old_slots.get(shift_id, {})):
+            return True
+    return False
+
+
 def _publication_notifications(db: Session, day: ActivityDay, shifts: dict, previous_id, version, now) -> int:
-    """Recipients of a publication (decision 2026-10-12, DESIGN_REVIEW §10.7):
-    for every affected shift, its assigned volunteers AND its waiting volunteers (the same derived
-    waiting list the manager board shows: pool - assigned in the new version). Removed people get
-    'unassigned'. Only called from publish(), so draft edits never notify. Deduplicated per person
-    per publication (dedup key = version + user), so a retried publish adds nothing and a later
-    publication notifies again."""
+    """Recipients of a publication (decision 2026-10-16, supersedes the 2026-10-12 'affected shift only' rule):
+    every volunteer assigned to the date's schedule in the new version, every volunteer waiting for that date
+    (the derived pool minus the assigned, the same list the manager board shows), and every volunteer removed
+    from it. Removed people get 'unassigned'. Only called from publish(), so draft edits never notify.
+    Deduplicated per person per publication (dedup key = version + user), so a retried publish adds nothing and
+    a later publication notifies again."""
     new_people, new_slots = _snapshot(db, version.id)
     old_people, old_slots = _snapshot(db, previous_id)
     pools = shift_pools(db, day, list(shifts.values()))
     first = previous_id is None
+
+    if not first and not _day_schedule_changed(shifts, new_people, old_people, new_slots, old_slots):
+        return 0  # a republication with no net change to the schedule notifies nobody
 
     changes: dict[uuid.UUID, list[tuple[str, str]]] = {}  # user -> [(shift kind, change)]
     for shift_id, shift in shifts.items():
         new_map, old_map = new_people.get(shift_id, {}), old_people.get(shift_id, {})
         added = set(new_map) - set(old_map)
         removed = set(old_map) - set(new_map)
-        moved = {u for u in set(new_map) & set(old_map) if new_map[u] != old_map[u]}
         new_slot_keys = set(new_slots.get(shift_id, {})) - set(old_slots.get(shift_id, {}))
-        slots_changed = set(new_slots.get(shift_id, {})) != set(old_slots.get(shift_id, {}))
-        if not first and not (added or removed or moved or slots_changed):
-            continue  # shift not affected by this publication
         waiting = set(pools.get(shift_id, {})) - set(new_map) - removed
         if first:
             waiting_change = "published_waiting"

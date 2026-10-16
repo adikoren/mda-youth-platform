@@ -147,21 +147,28 @@ export function BoardPage() {
         <div key={q.id} className="card stack">
           <div className="row spread">
             <span><strong>{q.full_name}</strong> · בקשה להרשמה{q.shift ? ` · משמרת ${SHIFT[q.shift as keyof typeof SHIFT]}` : ""}</span>
-            <button className="btn small" onClick={async () => {
-              await act(() => api.post(`/api/manage/requests/${q.id}/resolve`), "סומן כטופל");
-              await loadRequests();
-            }}>טופל</button>
           </div>
           <span className="muted">{q.message}</span>
+          <div className="row">
+            <button className="btn small primary" onClick={async () => {
+              await act(() => api.post(`/api/manage/requests/${q.id}/decision`, { decision: "approved" }), "הבקשה אושרה");
+              await loadRequests();
+            }}>אישור</button>
+            <button className="btn small ghost" onClick={async () => {
+              await act(() => api.post(`/api/manage/requests/${q.id}/decision`, { decision: "rejected" }), "הבקשה נדחתה");
+              await loadRequests();
+            }}>דחייה</button>
+          </div>
+          <span className="muted">לא ניתן לפרסם את הסידור כל עוד יש בקשות ממתינות. אישור או דחייה אינם משנים הרשמה או שיבוץ.</span>
         </div>
       ))}
-      {requests.some((q) => q.status === "resolved") && (
+      {requests.some((q) => q.status !== "pending") && (
         <details className="card">
-          <summary>בקשות שטופלו ({requests.filter((q) => q.status === "resolved").length})</summary>
+          <summary>בקשות שטופלו ({requests.filter((q) => q.status !== "pending").length})</summary>
           <div className="stack" style={{ marginTop: 8 }}>
-            {requests.filter((q) => q.status === "resolved").map((q) => (
+            {requests.filter((q) => q.status !== "pending").map((q) => (
               <div key={q.id} className="muted">
-                {q.full_name} · {fmtDateTime(q.created_at)} · {q.message}
+                {q.full_name} · {q.status === "approved" ? "אושרה" : q.status === "rejected" ? "נדחתה" : "טופלה"} · {fmtDateTime(q.created_at)} · {q.message}
               </div>
             ))}
           </div>

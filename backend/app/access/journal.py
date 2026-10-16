@@ -24,6 +24,7 @@ from app.core.timeutil import local_dt, local_today
 from app.days.models import ActivityDay, Shift
 from app.mentoring.models import MentorAccessExtension
 from app.scheduling.models import Assignment
+from app.scheduling.liveness import live_assignment
 
 EVENING_MENTOR_START = time(13, 30)
 MENTOR_END_NEXT_DAY = time(10, 0)
@@ -59,7 +60,7 @@ def crew_pairs(db: Session, shift_ids: list[uuid.UUID]) -> list[tuple[uuid.UUID,
          .join(ml, (ml.user_id == m.user_id) & ml.valid_to.is_(None) & (ml.level == "mentor"))
          .join(tl, (tl.user_id == t.user_id) & tl.valid_to.is_(None) & (tl.level == "trainee"))
          .where(m.version_id == ActivityDay.latest_published_version_id, m.shift_id.in_(shift_ids),
-                Shift.kind.in_(MENTORED_SHIFT_KINDS)))
+                Shift.kind.in_(MENTORED_SHIFT_KINDS), live_assignment(m), live_assignment(t)))
     return [tuple(r) for r in db.execute(q).all()]
 
 
