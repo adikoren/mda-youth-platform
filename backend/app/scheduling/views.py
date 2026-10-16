@@ -72,12 +72,14 @@ def published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetim
         by_slot.setdefault(a.slot_id, []).append(_person_out(p, extra))
     out_shifts = []
     for s in shifts:
-        s_slots = [sl for sl in slots if sl.shift_id == s.id]
-        if not s_slots:
+        # Published view: only ambulances with at least one assigned volunteer, and only shifts with at least one
+        # such ambulance. Empty records stay in the management editor (the board) and are not deleted.
+        populated = [sl for sl in slots if sl.shift_id == s.id and by_slot.get(sl.id)]
+        if not populated:
             continue
         out_shifts.append({**_shift_out(s), "slots": [
             {"slot_key": str(sl.slot_key), "ordinal": sl.ordinal, "capacity": sl.capacity,
-             "crew": sorted(by_slot.get(sl.id, []), key=lambda x: x["full_name"])} for sl in s_slots]})
+             "crew": sorted(by_slot[sl.id], key=lambda x: x["full_name"])} for sl in populated]})
     mine = any(a.user_id == actor.user_id for a in assignments)
     assigned_outside_home = mine and wd != SATURDAY and actor.home_weekday != wd
     return {"day": day_summary(day, now), "revision": version.revision, "published_at": version.published_at,

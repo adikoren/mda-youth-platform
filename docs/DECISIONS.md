@@ -254,6 +254,8 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
 
 - **D-68 Guest labels, profiles, WhatsApp and navigation** (2026-10-16). A guest shows the actual home weekday ("אורח/ת · יום שני"), kept apart from the role labels. A volunteer's name opens their profile (`/people/:id`, `GET /api/people/{id}`): visible to the volunteer themselves, Admin, Youth Manager, and a Day Manager only for people registered or assigned on a date they manage; anyone else gets not-found. Contact details appear only in that profile and in the existing manager view. WhatsApp is a green logo link with its own accessible label, separate from the name link; it is the one green in the app. Back is a visible "חזרה" button; it returns to the previous in-app page, and opens the fallback route when the page was opened directly. Time ranges render left to right inside Hebrew text. Colour: accents are red and white; roles and statuses are told apart by text, not by blue, purple, yellow or green.
 
+- **D-69 Published schedules show only populated ambulances** (2026-10-16). The published schedule (current, history and future publications alike) lists an ambulance only if it has at least one assigned volunteer, and a shift only if at least one of its ambulances is populated. No "אין שיבוץ" placeholder and no empty ambulance card. Management still sees every shift and ambulance on the board, and no record is deleted or defaults changed. Visibility permissions are unchanged. Tests: `tests/test_published_empty_hidden.py`.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

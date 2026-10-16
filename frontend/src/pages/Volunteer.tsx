@@ -504,7 +504,6 @@ export function ScheduleView() {
           {sh.slots.map((sl) => (
             <div key={sl.slot_key} className="slot">
               <strong>אמבולנס {sl.ordinal}</strong>
-              {sl.crew.length === 0 && <span className="muted">אין שיבוץ</span>}
               {sl.crew.map((p) => (
                 <div key={p.user_id} className="person">
                   {/* Own name only: other volunteers' profiles are for managers (see Profile page). */}
