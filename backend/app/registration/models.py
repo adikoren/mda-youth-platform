@@ -39,6 +39,10 @@ class RegistrationChoice(Base):
     is_late: Mapped[bool] = mapped_column(Boolean, default=False)  # last change made at/after closing
     first_answered_at: Mapped[datetime] = tstz()
     updated_at: Mapped[datetime] = tstz()
+    # Explicit cancellation by the volunteer. `available` keeps the answer the volunteer gave, so "cancelled"
+    # is never confused with "not available" or "no answer". Cancelled choices are not eligible candidates.
+    cancelled_at: Mapped[datetime | None] = tstz(nullable=True)
+    cancelled_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
 
 class ManagerAddedParticipant(Base):

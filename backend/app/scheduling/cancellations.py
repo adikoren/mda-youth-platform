@@ -40,8 +40,9 @@ def volunteer_cancel(db: Session, actor: Actor, shift: Shift, now: datetime) -> 
     if reg is not None:
         choice = db.scalar(select(RegistrationChoice).where(RegistrationChoice.registration_id == reg.id,
                                                             RegistrationChoice.shift_id == shift.id))
-        if choice is not None and choice.available:
-            choice.available, choice.updated_at = False, now
+        if choice is not None and choice.available and choice.cancelled_at is None:
+            # Explicit "בוטל": the original answer stays on the record; the cancellation is added beside it.
+            choice.cancelled_at, choice.cancelled_by_id, choice.updated_at = now, actor.user_id, now
             reg.revision += 1
             reg.updated_at, reg.updated_by_id = now, actor.user_id
             result["withdrawn"] = True

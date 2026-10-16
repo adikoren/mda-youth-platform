@@ -80,6 +80,7 @@ def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) 
             "available": None if c is None else c.available,
             "arrival_time": c.arrival_time.strftime("%H:%M") if c and c.arrival_time else None,
             "is_late": bool(c and c.is_late),
+            "cancelled_at": c.cancelled_at if c else None,
         })
     return {
         "activity_day_id": str(day.id), "date": day.local_date.isoformat(), "kind": day.kind,
@@ -137,16 +138,18 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
     withdrawn: list[uuid.UUID] = []
     for shift_id, (available, arrival) in parsed.items():
         c = existing.get(shift_id)
-        if c is not None and c.available == available and c.arrival_time == arrival:
+        if c is not None and c.available == available and c.arrival_time == arrival and c.cancelled_at is None:
             continue  # idempotent retry / no-op: other shift choices are preserved untouched
         if c is None:
             c = RegistrationChoice(registration_id=reg.id, shift_id=shift_id, available=available,
                                    arrival_time=arrival, is_late=late, first_answered_at=now, updated_at=now)
             db.add(c)
         else:
-            if c.available and not available:
+            if c.available and c.cancelled_at is None and not available:
                 withdrawn.append(shift_id)
+            # A new answer after a cancellation reopens the choice; the cancellation stays in the audit log.
             c.available, c.arrival_time, c.is_late, c.updated_at = available, arrival, late, now
+            c.cancelled_at, c.cancelled_by_id = None, None
         changed.append(shift_id)
 
     if not changed:

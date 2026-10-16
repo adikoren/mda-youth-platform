@@ -96,7 +96,18 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
     confirmations = {(i.user_id): i.status for i in db.scalars(select(Invitation).where(
         Invitation.activity_day_id == day.id, Invitation.kind == "direct_add",
         Invitation.status.in_(("pending", "confirmed"))))}
-    all_ids = {u for p in pools.values() for u in p} | {u for m in assigned.values() for u in m}
+    # Explicit cancellations ("בוטל"): kept visible to the Day Manager, never counted as candidates.
+    cancelled_rows = db.execute(select(RegistrationChoice, Registration.user_id, Shift.id)
+                                .join(Registration, Registration.id == RegistrationChoice.registration_id)
+                                .join(Shift, Shift.id == RegistrationChoice.shift_id)
+                                .where(Registration.activity_day_id == day.id,
+                                       RegistrationChoice.cancelled_at.is_not(None))
+                                .order_by(RegistrationChoice.cancelled_at)).all()
+    cancelled_by_shift: dict[uuid.UUID, list[tuple[uuid.UUID, datetime]]] = {}
+    for choice, uid, shift_id in cancelled_rows:
+        cancelled_by_shift.setdefault(shift_id, []).append((uid, choice.cancelled_at))
+    all_ids = {u for p in pools.values() for u in p} | {u for m in assigned.values() for u in m} \
+        | {u for rows in cancelled_by_shift.values() for u, _ in rows}
     info = people(db, all_ids)
     from app.mentoring.service import progress_for  # context only: never a priority formula
     progress = progress_for(db, [u for u, p in info.items() if p.level == "trainee"])
@@ -134,7 +145,9 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
              # Legacy value above today's limit: kept as is, shown for review (never changed silently).
              "capacity_over_limit": sl.capacity > MAX_CAPACITY}
             for sl in s_slots], "waiting": waiting,
-            "published_crew_count": len(published_assigned.get(s.id, {}))})
+            "published_crew_count": len(published_assigned.get(s.id, {})),
+            "cancelled": [_person_out(info[uid], {"cancelled_at": at.isoformat()})
+                          for uid, at in cancelled_by_shift.get(s.id, [])]})
     published = db.get(ScheduleVersion, day.latest_published_version_id) if day.latest_published_version_id else None
     return {
         "day": day_summary(day, now),
@@ -164,6 +177,7 @@ def registrations_table(db: Session, day: ActivityDay) -> list[dict]:
         item = out.setdefault(reg.user_id, {"user_id": str(reg.user_id), "full_name": p.full_name, "level": p.level,
                                             "updated_at": reg.updated_at, "choices": {}})
         item["choices"][kind] = {"available": choice.available,
+                                 "cancelled_at": choice.cancelled_at.isoformat() if choice.cancelled_at else None,
                                  "arrival_time": choice.arrival_time.strftime("%H:%M") if choice.arrival_time else None,
                                  "is_late": choice.is_late}
     return sorted(out.values(), key=lambda x: x["full_name"])

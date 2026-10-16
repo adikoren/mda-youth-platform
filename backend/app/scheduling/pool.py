@@ -65,7 +65,8 @@ def shift_pools(db: Session, day: ActivityDay, shifts: list[Shift]) -> dict[uuid
     choices = db.execute(
         select(RegistrationChoice, Registration.user_id)
         .join(Registration, Registration.id == RegistrationChoice.registration_id)
-        .where(Registration.activity_day_id == day.id, RegistrationChoice.available.is_(True))
+        .where(Registration.activity_day_id == day.id, RegistrationChoice.available.is_(True),
+               RegistrationChoice.cancelled_at.is_(None))  # cancelled registrations are not candidates
     ).all()
     for choice, user_id in choices:
         if choice.shift_id in pools:

@@ -15,6 +15,8 @@ interface RegShift {
   arrival_at: string;
   allows_late_arrival: boolean;
   available: boolean | null;
+  // Explicit "בוטל": set when the volunteer cancelled before the shift started. Not the same as "לא מגיע/ה".
+  cancelled_at: string | null;
   arrival_time: string | null;
   is_late: boolean;
   // Server's view of the shift's own cutoff: before its start, started, or ended.
@@ -49,11 +51,13 @@ interface NextAssignment {
 type RegStatus = { tone: "todo" | "done" | "no" | "wait" | "late"; label: string };
 
 function regStatus(r: Reg, invited = false): RegStatus {
-  const yes = r.shifts.filter((s) => s.available).map((s) => SHIFT[s.kind]);
-  const answered = r.shifts.some((s) => s.available !== null);
+  const live = r.shifts.filter((s) => !s.cancelled_at);
+  const yes = live.filter((s) => s.available).map((s) => SHIFT[s.kind]);
+  const answered = live.some((s) => s.available !== null);
   if (r.window === "not_open") return { tone: "wait", label: "טרם נפתחה" };
   if (yes.length) return { tone: "done", label: `נרשמת · ${yes.join(" + ")}` };
   if (answered) return { tone: "no", label: "סימנת: לא מגיע/ה" };
+  if (r.shifts.some((s) => s.cancelled_at)) return { tone: "no", label: "בוטל" };
   if (r.shifts.length && !r.shifts.some((s) => s.state === "before")) {
     const allEnded = r.shifts.every((s) => s.state === "ended");
     return { tone: "wait", label: allEnded ? "המשמרת הסתיימה" : "המשמרת כבר התחילה" };
@@ -390,28 +394,29 @@ export function RegisterDay() {
       {r.shifts.length === 0 && <div className="empty">אין ביום זה משמרות פתוחות להרשמה.</div>}
 
       {r.window !== "not_open" && r.shifts.map((s) => (
-        <section key={s.shift_id} className={`shift-card${s.available === true ? " is-yes" : s.available === false ? " is-no" : ""}`}>
+        <section key={s.shift_id} className={`shift-card${!s.cancelled_at && s.available === true ? " is-yes" : !s.cancelled_at && s.available === false ? " is-no" : ""}`}>
           <div className="shift-head">
             <h3>משמרת {SHIFT[s.kind]}</h3>
             <span className="shift-time">{fmtTime(s.starts_at)}–{fmtTime(s.ends_at)}</span>
           </div>
           <span className="muted">הגעה {fmtTime(s.arrival_at)}</span>
+          {s.cancelled_at && <span className="status status-no">בוטל · {fmtDateTime(s.cancelled_at)}</span>}
           {!canAnswer(s) && (
             <span className="status status-wait">{s.state === "ended" ? "המשמרת הסתיימה" : s.state === "started" ? "המשמרת כבר התחילה" : "ההרשמה נסגרה"}</span>
           )}
           {canAnswer(s) && (
           <div className="segmented" role="group" aria-label={`הרשמה למשמרת ${SHIFT[s.kind]}`}>
-            <button className="seg yes" aria-pressed={s.available === true} disabled={busy === s.shift_id}
+            <button className="seg yes" aria-pressed={!s.cancelled_at && s.available === true} disabled={busy === s.shift_id}
                     onClick={() => save(s, true, s.arrival_time)}>
               <span aria-hidden>✓</span> מגיע/ה
             </button>
-            <button className="seg no" aria-pressed={s.available === false} disabled={busy === s.shift_id}
+            <button className="seg no" aria-pressed={!s.cancelled_at && s.available === false} disabled={busy === s.shift_id}
                     onClick={() => save(s, false)}>
               <span aria-hidden>✕</span> לא מגיע/ה
             </button>
           </div>
           )}
-          {s.state === "before" && s.available === true && (
+          {s.state === "before" && s.available === true && !s.cancelled_at && (
             <button className="btn ghost small" disabled={busy === s.shift_id}
                     onClick={() => cancelMine(s)}>ביטול הרשמה למשמרת</button>
           )}

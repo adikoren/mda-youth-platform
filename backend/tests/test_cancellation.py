@@ -134,3 +134,68 @@ def test_cancel_before_publication_removes_person_from_pre_publication_draft(wor
     r = cancel(Client("thu.youth@x.test"), evening_row(db).id)
     assert r.json() == {"withdrawn": True, "published_cancelled": False, "removed_from_draft": True}
     assert warnings(db) == []
+
+
+def choice_row(db, world, user_key: str, shift_id):
+    from app.registration.models import Registration, RegistrationChoice
+    db.expire_all()
+    return db.execute(select(RegistrationChoice.available, RegistrationChoice.cancelled_at, RegistrationChoice.cancelled_by_id)
+                      .join(Registration, Registration.id == RegistrationChoice.registration_id)
+                      .where(Registration.user_id == world.uid(user_key),
+                             Registration.activity_day_id == uuid.UUID(world.day(THU)),
+                             RegistrationChoice.shift_id == shift_id)).one_or_none()
+
+
+def board_shift(world, mgr_email="thu.mgr@x.test"):
+    r = Client(mgr_email).get(f"/api/manage/days/{world.day(THU)}/board")
+    assert r.status_code == 200, r.text
+    return shift(r.json(), "evening")
+
+
+def test_cancellation_is_an_explicit_state_not_not_available(world, db, clock):
+    clock.set(at(BEFORE_PUBLICATION, "21:00"))
+    vol = Client("thu.youth@x.test")
+    assert register(vol, world.day(THU), evening=True).status_code == 200
+    sid = evening_row(db).id
+    assert cancel(vol, sid).status_code == 200
+
+    # The original answer stays on the record; the cancellation is recorded beside it, by whom and when.
+    row = choice_row(db, world, "thu_youth", sid)
+    assert row.available is True and row.cancelled_at is not None
+    assert row.cancelled_by_id == uuid.UUID(str(world.uid("thu_youth")))
+
+    # The volunteer sees "בוטל", not "not available".
+    mine = [s for s in vol.get(f"/api/registrations/{world.day(THU)}").json()["shifts"] if s["shift_id"] == str(sid)][0]
+    assert mine["cancelled_at"] is not None and mine["available"] is True
+
+    # The Day Manager sees the cancellation, and the person is not an eligible candidate.
+    ev = board_shift(world)
+    assert str(world.uid("thu_youth")) in [c["user_id"] for c in ev["cancelled"]]
+    assert str(world.uid("thu_youth")) not in [w["user_id"] for w in ev["waiting"]]
+
+
+def test_not_available_is_distinct_from_cancelled(world, db, clock):
+    clock.set(at(BEFORE_PUBLICATION, "21:00"))
+    vol = Client("thu.trainee@x.test")
+    assert register(vol, world.day(THU), evening=False).status_code == 200  # answered: not coming
+    sid = evening_row(db).id
+    row = choice_row(db, world, "thu_trainee", sid)
+    assert row.available is False and row.cancelled_at is None  # "לא מגיע/ה", not "בוטל"
+    ev = board_shift(world)
+    assert str(world.uid("thu_trainee")) not in [c["user_id"] for c in ev["cancelled"]]
+    # Nothing was cancelled, so there is nothing to cancel.
+    assert cancel(vol, sid).status_code == 404
+
+
+def test_a_new_answer_after_cancelling_reopens_the_registration(world, db, clock):
+    clock.set(at(BEFORE_PUBLICATION, "21:00"))
+    vol = Client("thu.youth@x.test")
+    assert register(vol, world.day(THU), evening=True).status_code == 200
+    sid = evening_row(db).id
+    assert cancel(vol, sid).status_code == 200
+    assert register(vol, world.day(THU), evening=True).status_code == 200
+    row = choice_row(db, world, "thu_youth", sid)
+    assert row.available is True and row.cancelled_at is None
+    ev = board_shift(world)
+    assert str(world.uid("thu_youth")) in [w["user_id"] for w in ev["waiting"]]
+    assert str(world.uid("thu_youth")) not in [c["user_id"] for c in ev["cancelled"]]

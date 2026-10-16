@@ -47,7 +47,7 @@ interface Slot { slot_key: string; ordinal: number; capacity: number; status: "a
   capacity_over_limit?: boolean }
 // Upper bound for the capacity setting (the backend enforces it too). More crew than capacity is still allowed.
 const MAX_CAPACITY = 3;
-interface BoardShift { id: string; kind: ShiftKind; starts_at: string; ends_at: string; arrival_at: string; slots: Slot[]; waiting: Person[];
+interface BoardShift { id: string; kind: ShiftKind; starts_at: string; ends_at: string; arrival_at: string; slots: Slot[]; waiting: Person[]; cancelled: (Person & { cancelled_at: string })[];
   self_selectable: boolean; registration_toggle: boolean }
 interface Board {
   day: DaySummary;
@@ -244,6 +244,18 @@ export function BoardPage() {
           ))}
           <button className="btn small" onClick={() => act(() => api.post(`/api/manage/shifts/${sh.id}/slots`, { capacity: 3 }))}>+ אמבולנס</button>
 
+          {sh.cancelled.length > 0 && (
+            <div className="stack">
+              <strong>בוטלו ({sh.cancelled.length})</strong>
+              <span className="muted">בוטל על ידי המתנדב עצמו. לא נספרים כמועמדים.</span>
+              {sh.cancelled.map((p) => (
+                <div key={p.user_id} className="person">
+                  <PersonLine p={p} />
+                  <span className="muted">בוטל · {fmtDateTime(p.cancelled_at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="stack">
             <strong>ממתינים ({sh.waiting.length})</strong>
             {sh.waiting.length === 0 && <span className="muted">אין ממתינים</span>}
