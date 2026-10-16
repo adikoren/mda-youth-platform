@@ -234,6 +234,8 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Replaces** the earlier approval that allowed volunteers' late edits with a manager notification (the original spec, §10 and the `late_registration` path for volunteers). The manager notification now comes only from management late changes.
   - **Tests:** `tests/test_registration_closing.py` (closing at 17:59:59 / 18:00:00 / 18:00:01; the window between closing and the start; the start at 14:59:59 / 15:00:00 / 15:00:01; a form open across closing; management after closing) plus updated boundary and late-edit tests.
 
+- **D-59 Publication moves a date from registration to the schedule** (2026-10-16). The registration list ('הרשמה למשמרות') excludes any date whose schedule is published (`latest_published_version_id` set), for every user, and the schedule ('סידור') lists it instead, labelled DD/MM with the weekday. Only publication status decides this. Closing and shift start do not. Unpublished closed dates stay in registration. Schedule visibility rules are unchanged (home day, Saturday, assignees and guests within their window). A volunteer with no visibility of a published date sees it in neither section. The bottom navigation label is now "סידור".
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

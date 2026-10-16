@@ -46,6 +46,12 @@ export function localToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date());
 }
 
+/** Schedule list label: DD/MM only (the weekday is shown next to it). */
+export function fmtDM(date: string): string {
+  const [, m, d] = date.split("-").map(Number);
+  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
+}
+
 export function dayTitle(d: { date: string; weekday: number }): string {
   return `יום ${WEEKDAYS[d.weekday]} ${fmtDate(d.date)}`;
 }

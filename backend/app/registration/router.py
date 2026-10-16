@@ -34,9 +34,13 @@ class RegistrationIn(BaseModel):
 @router.get("/registrations")
 def upcoming(days_ahead: int = 14, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
              now: datetime = Depends(now_dep)):
-    """Dates the actor may answer, from today forward (eligibility via the shared SQL predicate)."""
+    """Dates the actor may answer, from today forward (eligibility via the shared SQL predicate).
+    Publication ends the registration entry: once a schedule is published, its assignments are read in
+    'סידור' instead (publication status decides, not the clock). Visibility of the schedule itself is
+    unchanged (app.access.queries.published_schedule_visible)."""
     today = local_today(now)
     days = db.scalars(select(ActivityDay).where(queries.registerable_days(actor, now),
+                                                ActivityDay.latest_published_version_id.is_(None),
                                                 ActivityDay.local_date >= today,
                                                 ActivityDay.local_date <= today + timedelta(days=min(days_ahead, 60)))
                       .order_by(ActivityDay.local_date))

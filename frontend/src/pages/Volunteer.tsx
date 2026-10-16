@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
-import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime, localToday, phoneStatus } from "../he";
+import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDM, fmtDateTime, fmtTime, localToday, phoneStatus } from "../he";
 import { LevelBadge, Loading, Shell, errorText, useLoad } from "../ui";
 import { newRideId } from "../offline";
 import { NotificationNotice } from "./Journal";
@@ -412,12 +412,12 @@ interface PubSchedule {
 export function ScheduleList() {
   const list = useLoad(() => api.get<{ items: DaySummary[] }>("/api/schedule"));
   return (
-    <Shell title="סידורים מפורסמים">
+    <Shell title="סידור">
       {!list.data && <Loading error={list.error} />}
       {list.data?.items.length === 0 && <div className="card muted">אין סידורים מפורסמים שזמינים לך כרגע.</div>}
       {list.data?.items.map((d) => (
         <Link key={d.id} to={`/schedule/${d.id}`} className="card list-link">
-          <span>{dayTitle(d)}</span>
+          <span><strong>{fmtDM(d.date)}</strong> <span className="muted">{WEEKDAYS[d.weekday]}</span></span>
           <span className="muted">{DAY_KIND[d.kind]} ›</span>
         </Link>
       ))}

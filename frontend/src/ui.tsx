@@ -79,7 +79,7 @@ function BottomNav() {
   const { me } = useAuth();
   const items: [string, string, string][] = [
     ["/", "בית", "⌂"],
-    ["/schedule", "סידורים", "▤"],
+    ["/schedule", "סידור", "▤"],
   ];
   if (me?.level === "trainee") items.push(["/journal", "יומן", "✚"]);
   if (me?.level === "mentor") items.push(["/mentor", "חניכה", "✚"]);
