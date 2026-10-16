@@ -242,3 +242,8 @@ body { line-height: 1.45; }
 .shift-foot:empty { display: none; }
 .saved { color: var(--ok); font-weight: 700; font-size: .88rem; }
 a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+
+/* Registration rows: status and call to action sit together on the right, wrapping on narrow screens. */
+.reg-row { gap: 12px; }
+.reg-end { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.reg-row .btn.small { min-height: 40px; }

@@ -48,20 +48,11 @@ function regStatus(r: Reg, invited = false): RegStatus {
   if (yes.length) return { tone: "done", label: `נרשמת · ${yes.join(" + ")}` };
   if (answered) return { tone: "no", label: "סימנת: לא מגיע/ה" };
   if (invited) return { tone: "todo", label: "הוזמנת להירשם" };
-  if (r.window === "closed_late_allowed") return { tone: "late", label: "נסגרה — עדיין אפשר לסמן" };
+  if (r.window === "closed_late_allowed") return { tone: "late", label: "נסגרה" };
   return { tone: "todo", label: "טרם סימנת" };
 }
 
-/** "14.10 · 20:00" — compact enough for one line at 360px. */
-function fmtShort(iso: string): string {
-  const p = new Intl.DateTimeFormat("he-IL", { timeZone: "Asia/Jerusalem", day: "numeric", month: "numeric" }).format(new Date(iso));
-  return `${p} · ${fmtTime(iso)}`;
-}
 
-function needsAnswer(r: Reg): boolean {
-  return r.shifts.length > 0 && (r.window === "open" || r.window === "closed_late_allowed")
-    && r.shifts.every((s) => s.available === null);
-}
 
 function noteLine(n: Note): string {
   const parts = [n.text];
@@ -140,18 +131,27 @@ export function Home() {
         {!regs.data && <Loading error={regs.error} />}
         {regs.data?.length === 0 && <div className="empty">אין כרגע תאריכים להרשמה.</div>}
         <div className="reg-list">
-          {regs.data?.map((r) => {
+          {/* Registration not yet open: hidden from volunteers. Closed entries stay accessible (read-only, request only). */}
+          {regs.data?.filter((r) => r.window !== "not_open").map((r) => {
             const st = regStatus(r, invitedDays.has(r.activity_day_id));
-            const actionable = invitedDays.has(r.activity_day_id) || needsAnswer(r);
+            const label = dayTitle(r);
             return (
-              <Link key={r.activity_day_id} className="reg-row" to={`/register/${r.activity_day_id}`}>
+              <div key={r.activity_day_id} className="reg-row">
                 <span className="reg-date">
-                  <strong>{dayTitle(r)}</strong>
-                  <span className="muted">{DAY_KIND[r.kind]}{r.window === "not_open" ? ` · נפתחת ${fmtShort(r.opens_at)}` : ""}</span>
-                  {actionable && <span className="go">להרשמה למשמרת ‹</span>}
+                  <strong>{label}</strong>
+                  <span className="muted">{DAY_KIND[r.kind]}</span>
                 </span>
-                <span className={`status status-${st.tone}`}>{st.label}</span>
-              </Link>
+                <span className="reg-end">
+                  <span className={`status status-${st.tone}`}>{st.label}</span>
+                  {r.window === "open" ? (
+                    <Link className="btn primary small" to={`/register/${r.activity_day_id}`} aria-label={`להרשמה למשמרת ${label}`}>
+                      להרשמה למשמרת
+                    </Link>
+                  ) : (
+                    <Link className="btn small" to={`/register/${r.activity_day_id}`} aria-label={`פתיחת ${label}`}>פתיחה</Link>
+                  )}
+                </span>
+              </div>
             );
           })}
         </div>
@@ -192,6 +192,7 @@ const WINDOW_TONE: Record<string, string> = { open: "done", closed_late_allowed:
 
 export function RegisterDay() {
   const { dayId } = useParams();
+  const { me } = useAuth();
   const reg = useLoad(() => api.get<Reg>(`/api/registrations/${dayId}`), [dayId]);
   const [saved, setSaved] = useState<{ shift: string; late: boolean } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -257,7 +258,9 @@ export function RegisterDay() {
 
   if (!reg.data) return <Shell title="הרשמה" back="/"><Loading error={reg.error} /></Shell>;
   const r = reg.data;
-  const editable = r.window === "open" || r.window === "closed_late_allowed";
+  // After closing, volunteers cannot change answers directly; they send a request instead.
+  // Admin keeps direct management of the registration (DECISIONS D-53).
+  const editable = r.window === "open" || (r.window === "closed_late_allowed" && !!me?.is_admin);
   return (
     <Shell title="הרשמה למשמרת" back="/">
       <section className="day-head">
@@ -269,8 +272,9 @@ export function RegisterDay() {
         </span>
       </section>
       {r.window === "closed_late_allowed" && (
-        <div className="notice">אפשר עדיין לעדכן. כל שינוי יישלח לאחראי, ולא משנה שיבוץ שכבר פורסם.</div>
+        <div className="notice">ההרשמה נסגרה. לבקשה להרשמה באיחור, השתמשו בכפתור למטה.</div>
       )}
+      {r.window === "not_open" && <div className="notice">ההרשמה טרם נפתחה.</div>}
       {err && <div className="error" role="alert">{err}</div>}
       {r.window === "closed_late_allowed" && (
         <section className="request-box stack">
@@ -281,7 +285,7 @@ export function RegisterDay() {
             </div>
           )}
           {!reqOpen ? (
-            <button className="btn" onClick={openRequest}>שליחת בקשה לאחראי</button>
+            <button className="btn" onClick={openRequest}>בקשה להרשמה באיחור</button>
           ) : (
             <div className="stack">
               <label className="field">
@@ -312,7 +316,7 @@ export function RegisterDay() {
       )}
       {r.shifts.length === 0 && <div className="empty">אין ביום זה משמרות פתוחות להרשמה.</div>}
 
-      {r.shifts.map((s) => (
+      {r.window !== "not_open" && r.shifts.map((s) => (
         <section key={s.shift_id} className={`shift-card${s.available === true ? " is-yes" : s.available === false ? " is-no" : ""}`}>
           <div className="shift-head">
             <h3>משמרת {SHIFT[s.kind]}</h3>

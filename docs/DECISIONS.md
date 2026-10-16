@@ -207,6 +207,14 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
 
 - **D-55 Volunteer home: no duplicate registration content** (2026-10-16). "נדרשת פעולה" shows only distinct tasks (confirming a manager-added shift), and is hidden when there are none. Invitations to register and dates still to answer appear only in "הרשמה למשמרות", on the date row, with the call to action "להרשמה למשמרת". The registration screen's group label now reads "הרשמה למשמרת …". No change to registration behaviour or permissions.
 
+- **D-56 Registration list and closed state** (2026-10-16).
+  - **Not-open days** are hidden from the volunteer's registration list. Their screen shows "ההרשמה טרם נפתחה" and no shift controls.
+  - **Open days** show a clear button "להרשמה למשמרת". **Closed days** stay accessible via "פתיחה" (read-only), with the status "נסגרה" only; the "נסגרה — עדיין אפשר לסמן" wording is gone.
+  - **Closed screen:** the shift buttons are locked for volunteers. The request button "בקשה להרשמה באיחור" appears only after the volunteer opens the entry, and it opens the explicit request form (D-54). Submitting never registers or assigns.
+  - **Admin** keeps direct editing of the registration after closing (D-53).
+  - **Label change:** the request button is now "בקשה להרשמה באיחור" (replacing "שליחת בקשה לאחראי" on the button only). The form's submit ("שליחה לאחראי") and the success text ("הבקשה נשלחה לאחראי") are unchanged.
+  - **Open decision:** the API still accepts direct late changes by volunteers and day managers (approved in the original spec: "first late registration and all late edits allowed, notify manager"). The screen now locks them, so the two disagree. Choose: (a) the API also refuses direct changes after closing (except Admin), or (b) keep the API rule and make the screen consistent with it again.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.
