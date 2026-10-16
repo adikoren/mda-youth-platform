@@ -186,10 +186,18 @@ def active_invitations(db: Session, actor: Actor, now: datetime) -> list[dict]:
 # is allowed only in the closed window (after the planning cutoff, before the date ends); before
 # opening or during the open window the volunteer answers directly, and after the date it is too late.
 
+def _same_text(a: str, b: str) -> bool:
+    return " ".join(a.split()) == " ".join(b.split())
+
+
 def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid.UUID, message: str,
-                   now: datetime) -> tuple[RegistrationRequest, bool]:
+                   now: datetime, confirm_duplicate: bool = False) -> tuple[RegistrationRequest, bool]:
     """Idempotent by the client-generated request_id: a retried submit returns the stored request
-    (200) instead of creating a second one or notifying the managers again (201 when created)."""
+    (200) instead of creating a second one or notifying the managers again (201 when created).
+
+    Several requests per day are allowed (intentional follow-ups). An identical text that is still
+    pending for the same day is refused with 409 duplicate_request, so an accidental second press
+    does not create a second request, unless the volunteer confirms it (confirm_duplicate)."""
     if not can_register_for_day(db, actor, day, now):
         raise not_found("day_not_found", "היום לא נמצא")
     existing = db.get(RegistrationRequest, request_id)
@@ -208,6 +216,15 @@ def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid
     text = (message or "").strip()
     if len(text) < 2:
         raise bad_request("request_empty", "יש לכתוב את הבקשה")
+    if not confirm_duplicate:
+        pending = db.scalars(select(RegistrationRequest).where(
+            RegistrationRequest.user_id == actor.user_id, RegistrationRequest.activity_day_id == day.id,
+            RegistrationRequest.status == "pending")).all()
+        twin = next((p for p in pending if _same_text(p.message, text)), None)
+        if twin is not None:
+            db.rollback()
+            raise conflict("duplicate_request", "כבר נשלחה בקשה זהה שעדיין לא טופלה. לשלוח שוב?",
+                           {"existing_id": str(twin.id)})
     req = RegistrationRequest(id=request_id, user_id=actor.user_id, activity_day_id=day.id, message=text,
                               status="pending", created_at=now)
     db.add(req)
@@ -223,13 +240,14 @@ def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid
     return req, True
 
 
-def pending_requests(db: Session, actor: Actor, day: ActivityDay) -> list[dict]:
+def day_requests(db: Session, actor: Actor, day: ActivityDay) -> list[dict]:
+    """Every request for the day, pending first, so handled requests stay available for review."""
     require_manage_day(actor, day)
     rows = db.execute(select(RegistrationRequest, User.full_name).join(User, User.id == RegistrationRequest.user_id)
-                      .where(RegistrationRequest.activity_day_id == day.id, RegistrationRequest.status == "pending")
-                      .order_by(RegistrationRequest.created_at)).all()
+                      .where(RegistrationRequest.activity_day_id == day.id)
+                      .order_by((RegistrationRequest.status == "resolved"), RegistrationRequest.created_at)).all()
     return [{"id": str(r.id), "user_id": str(r.user_id), "full_name": name, "message": r.message,
-             "created_at": r.created_at} for r, name in rows]
+             "status": r.status, "created_at": r.created_at, "resolved_at": r.resolved_at} for r, name in rows]
 
 
 def resolve_request(db: Session, actor: Actor, request_id: uuid.UUID, now: datetime) -> None:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type DaySummary, type ShiftKind } from "../api";
+import { api, ApiError, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
 import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime, localToday, phoneStatus } from "../he";
 import { LevelBadge, Loading, Shell, errorText, useLoad } from "../ui";
@@ -217,25 +217,30 @@ export function RegisterDay() {
   const [reqId, setReqId] = useState<string | null>(null); // same id on retry, so a retry never duplicates
   const [reqSending, setReqSending] = useState(false);
   const [reqErr, setReqErr] = useState<string | null>(null);
+  const [reqDuplicate, setReqDuplicate] = useState(false); // an identical request is still pending
 
   function openRequest() {
+    setReqDuplicate(false);
     setReqId(newRideId());
     setReqErr(null);
     setReqOpen(true);
   }
 
-  async function sendRequest() {
+  async function sendRequest(confirmDuplicate = false) {
     if (!reqId) return;
     setReqSending(true);
     setReqErr(null);
     try {
-      await api.post(`/api/registrations/${dayId}/requests`, { id: reqId, message: reqText });
+      await api.post(`/api/registrations/${dayId}/requests`,
+                     { id: reqId, message: reqText, confirm_duplicate: confirmDuplicate });
       setReqOpen(false);
       setReqText("");
       setReqId(null);
+      setReqDuplicate(false);
       reg.reload();
     } catch (e) {
-      setReqErr(errorText(e));
+      if (e instanceof ApiError && e.code === "duplicate_request") setReqDuplicate(true);
+      else setReqErr(errorText(e));
     } finally {
       setReqSending(false);
     }
@@ -284,7 +289,10 @@ export function RegisterDay() {
       {r.window === "closed_late_allowed" && (
         <section className="request-box stack">
           {(r.requests?.length ?? 0) > 0 && (
-            <div className="saved" role="status">הבקשה נשלחה לאחראי · {fmtDateTime(r.requests![r.requests!.length - 1].created_at)}</div>
+            <div className="stack" style={{ gap: 2 }}>
+              <div className="saved" role="status">הבקשה נשלחה לאחראי · {fmtDateTime(r.requests![r.requests!.length - 1].created_at)}</div>
+              <span className="muted">ההודעה מוצגת לאחראי באפליקציה בלבד.</span>
+            </div>
           )}
           {!reqOpen ? (
             <button className="btn" onClick={openRequest}>שליחת בקשה לאחראי</button>
@@ -295,12 +303,22 @@ export function RegisterDay() {
                 <textarea rows={3} maxLength={1000} value={reqText} disabled={reqSending}
                           onChange={(e) => setReqText(e.target.value)} />
               </label>
-              <div className="row">
-                <button className="btn primary" disabled={reqSending || reqText.trim().length < 2} onClick={sendRequest}>
-                  {reqErr ? "ניסיון נוסף" : "שליחה לאחראי"}
-                </button>
-                <button className="btn ghost" disabled={reqSending} onClick={() => setReqOpen(false)}>ביטול</button>
-              </div>
+              {reqDuplicate ? (
+                <div className="notice stack" role="alert">
+                  <span>כבר נשלחה בקשה זהה שעדיין לא טופלה. לשלוח שוב?</span>
+                  <div className="row">
+                    <button className="btn primary" disabled={reqSending} onClick={() => sendRequest(true)}>שליחה בכל זאת</button>
+                    <button className="btn ghost" disabled={reqSending} onClick={() => setReqDuplicate(false)}>ביטול</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="row">
+                  <button className="btn primary" disabled={reqSending || reqText.trim().length < 2} onClick={() => sendRequest(false)}>
+                    {reqErr ? "ניסיון נוסף" : "שליחה לאחראי"}
+                  </button>
+                  <button className="btn ghost" disabled={reqSending} onClick={() => setReqOpen(false)}>ביטול</button>
+                </div>
+              )}
               {reqErr && <div className="error" role="alert">השליחה נכשלה: {reqErr}. הטקסט נשמר, אפשר לנסות שוב.</div>}
             </div>
           )}

@@ -113,9 +113,10 @@ def test_only_the_day_managers_see_and_resolve_requests(world, db, clock):
     assert Client("sat.mgr@x.test").get(f"/api/manage/days/{world.day(THU)}/requests").status_code == 404
     assert Client("thu.youth@x.test").get(f"/api/manage/days/{world.day(THU)}/requests").status_code == 404
     assert Client("sat.mgr@x.test").post(f"/api/manage/requests/{rid}/resolve").status_code == 404
-    # Resolving removes it from the pending list; the record stays.
+    # Resolving marks it handled; it stays listed for review (not deleted).
     assert mgr.post(f"/api/manage/requests/{rid}/resolve").status_code == 200
-    assert mgr.get(f"/api/manage/days/{world.day(THU)}/requests").json() == []
+    listed = mgr.get(f"/api/manage/days/{world.day(THU)}/requests").json()
+    assert [(x["id"], x["status"]) for x in listed] == [(rid, "resolved")] and listed[0]["resolved_at"]
     assert db.scalar(text(f"select status from registration_requests where id = '{rid}'")) == "resolved"
 
 
@@ -136,3 +137,38 @@ def test_the_screen_shows_sent_requests_so_reloading_does_not_duplicate(world, d
     assert [(x["id"], x["status"]) for x in got] == [(rid, "pending")]
     # Another volunteer's requests are never shown.
     assert Client("thu.trainee@x.test").get(f"/api/registrations/{world.day(THU)}").json()["requests"] == []
+
+
+def test_identical_pending_request_is_refused_until_confirmed(world, db, clock):
+    clock.set(at(CLOSED, "12:00"))
+    vol = Client("thu.youth@x.test")
+    _, first = submit(vol, world, message="אפשר להחליף משמרת?")
+    before = counts(db)
+    # An accidental second press (new form, same text, still pending) creates nothing.
+    _, dup = submit(vol, world, message="  אפשר   להחליף משמרת? ")
+    assert dup.status_code == 409 and dup.json()["code"] == "duplicate_request"
+    assert dup.json()["existing_id"] == first.json()["id"]
+    assert counts(db) == before
+    # The volunteer confirms: an intentional repeat is accepted.
+    _, ok = submit(vol, world, message="אפשר להחליף משמרת?", request_id=str(uuid.uuid4()))
+    assert ok.status_code == 409  # still refused without the flag
+    rid = str(uuid.uuid4())
+    r = vol.post(f"/api/registrations/{world.day(THU)}/requests",
+                 {"id": rid, "message": "אפשר להחליף משמרת?", "confirm_duplicate": True})
+    assert r.status_code == 201 and counts(db)[1] == 2
+
+
+def test_identical_text_is_allowed_again_once_the_first_is_handled(world, db, clock):
+    clock.set(at(CLOSED, "12:00"))
+    vol, mgr = Client("thu.youth@x.test"), Client("thu.mgr@x.test")
+    rid, _ = submit(vol, world, message="בקשה חוזרת")
+    assert mgr.post(f"/api/manage/requests/{rid}/resolve").status_code == 200
+    _, again = submit(vol, world, message="בקשה חוזרת")  # a new issue, after the first was handled
+    assert again.status_code == 201
+
+
+def test_a_different_volunteer_with_the_same_text_is_not_a_duplicate(world, clock):
+    clock.set(at(CLOSED, "12:00"))
+    _, a = submit(Client("thu.youth@x.test"), world, message="שאלה משותפת")
+    _, b = submit(Client("thu.trainee@x.test"), world, message="שאלה משותפת")
+    assert a.status_code == 201 and b.status_code == 201

@@ -74,7 +74,7 @@ cd frontend && npm run build  # type-check + production build
 cd frontend && npm test       # conflict-merge unit tests (Node 23+ built-in runner)
 ```
 
-118 backend tests run against real PostgreSQL, grouped by area:
+121 backend tests run against real PostgreSQL, grouped by area:
 
 - **Calendar and time:** the seven registration calendars, and the 24–25 Oct DST night.
 - **Accounts and access:** sessions, CSRF, rate limiting, pending/admin/youth-manager/day-manager scopes.

@@ -55,8 +55,8 @@ def published(day_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: S
 
 @router.get("/manage/days/{day_id}/requests")
 def day_requests(day_id: uuid.UUID, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db)):
-    """Written requests from volunteers after registration closed, still pending."""
-    return registration_service.pending_requests(db, actor, service.get_day(db, day_id))
+    """Written requests from volunteers after registration closed (pending first, then handled)."""
+    return registration_service.day_requests(db, actor, service.get_day(db, day_id))
 
 
 @router.post("/manage/requests/{request_id}/resolve")

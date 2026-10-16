@@ -199,6 +199,10 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Manager view:** the day's board shows pending requests with the text and a "טופל" (handled) button (`POST /api/manage/requests/{id}/resolve`). Only managers of that day, or Admin, see the text.
   - **Screen state:** the registration response includes the volunteer's own requests, so the screen shows "הבקשה נשלחה לאחראי" with the time after a reload and does not suggest a duplicate. A later request stays possible on purpose.
   - **Errors:** a failed send shows the error, keeps the text, and offers "ניסיון נוסף" (retry) with the same id.
+  - **Several requests are allowed** for the same volunteer and day (intentional follow-ups, decided 2026-10-16).
+  - **Accidental duplicates:** an identical text (whitespace-insensitive) that is still pending for the same volunteer and day is refused with 409 `duplicate_request`. The screen asks "לשלוח שוב?" and sends again only with `confirm_duplicate`. Once the first is handled, the same text is allowed as a new issue.
+  - **Review:** handled requests stay listed for the managers, under "בקשות שטופלו" (status `resolved`), and are never deleted.
+  - **Delivery wording:** the screen states that the message is shown to the manager in the app only. No SMS or WhatsApp message is implied; the phone-channel status remains "simulated" until a provider is connected.
   - **Admin:** unchanged. Admin still manages registrations directly.
 
 ## Not built yet

@@ -64,7 +64,7 @@ export function BoardPage() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
-  const [requests, setRequests] = useState<{ id: string; full_name: string; message: string; created_at: string }[]>([]);
+  const [requests, setRequests] = useState<{ id: string; full_name: string; message: string; status: string; created_at: string; resolved_at: string | null }[]>([]);
 
   const loadRequests = useCallback(async () => {
     try {
@@ -143,7 +143,7 @@ export function BoardPage() {
         {board.published && <Link to={`/schedule/${board.day.id}`}>לצפייה בסידור המפורסם</Link>}
       </div>
 
-      {requests.map((q) => (
+      {requests.filter((q) => q.status === "pending").map((q) => (
         <div key={q.id} className="card stack">
           <div className="row spread">
             <span><strong>{q.full_name}</strong> · בקשה להרשמה</span>
@@ -155,6 +155,18 @@ export function BoardPage() {
           <span className="muted">{q.message}</span>
         </div>
       ))}
+      {requests.some((q) => q.status === "resolved") && (
+        <details className="card">
+          <summary>בקשות שטופלו ({requests.filter((q) => q.status === "resolved").length})</summary>
+          <div className="stack" style={{ marginTop: 8 }}>
+            {requests.filter((q) => q.status === "resolved").map((q) => (
+              <div key={q.id} className="muted">
+                {q.full_name} · {fmtDateTime(q.created_at)} · {q.message}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       {board.attentions.map((a) => (
         <div key={a.id} className="card alert row spread">
