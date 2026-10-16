@@ -8,7 +8,8 @@ from app.access.context import Actor
 from app.core.timeutil import SATURDAY
 from app.days.models import ActivityDay
 from app.registration.models import Invitation
-from app.scheduling.models import Assignment
+from app.scheduling.liveness import live_boarding
+from app.scheduling.models import Assignment, BoardingEntry
 
 
 def _weekday_col():
@@ -31,6 +32,11 @@ def published_schedule_visible(actor: Actor, now: datetime) -> ColumnElement[boo
     clauses.append(exists().where(
         Assignment.version_id == ActivityDay.latest_published_version_id,
         Assignment.user_id == actor.user_id,
+    ))
+    clauses.append(exists().where(  # a trainee on the published boarding order (scheduled participation)
+        BoardingEntry.version_id == ActivityDay.latest_published_version_id,
+        BoardingEntry.user_id == actor.user_id,
+        live_boarding(BoardingEntry),
     ))
     return and_(published, or_(*clauses))
 

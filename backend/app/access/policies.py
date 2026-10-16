@@ -64,6 +64,9 @@ def can_read_day_registrations(actor: Actor, day: ActivityDay) -> bool:
 
 
 def is_published_assignee(db: Session, actor: Actor, day: ActivityDay) -> bool:
+    """Recorded published assignment to this date, or a place on its published boarding order."""
+    from app.scheduling.liveness import live_boarding
+    from app.scheduling.models import BoardingEntry
     if day.latest_published_version_id is None:
         return False
     return bool(
@@ -72,6 +75,14 @@ def is_published_assignee(db: Session, actor: Actor, day: ActivityDay) -> bool:
                 exists().where(
                     Assignment.version_id == day.latest_published_version_id,
                     Assignment.user_id == actor.user_id,
+                )
+            )
+        ) or db.scalar(
+            select(
+                exists().where(
+                    BoardingEntry.version_id == day.latest_published_version_id,
+                    BoardingEntry.user_id == actor.user_id,
+                    live_boarding(BoardingEntry),
                 )
             )
         )

@@ -263,3 +263,12 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .wa-link:hover { background: #f1f2f5; }
 /* A shift with no assignments yet: one line, not an empty card. */
 .compact-empty { font-size: .9rem; }
+
+/* ---- crew, operators and boarding order ---- */
+/* Operating volunteer: a separate line under the ambulance name, not a role badge. */
+.operator-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .92rem; padding: 4px 0; }
+/* Unfilled trainee position on a populated ambulance: dashed, neutral. */
+.empty-position { border: 1px dashed var(--line); border-radius: 10px; padding: 6px 10px; }
+.boarding-list { margin: 0; padding-inline-start: 1.4rem; display: grid; gap: 6px; }
+.operator-form summary { cursor: pointer; color: var(--ink-2); font-size: .9rem; min-height: 40px; display: flex; align-items: center; }
+.operator-form input[type="time"] { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; }

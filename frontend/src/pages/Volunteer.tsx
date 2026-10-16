@@ -455,7 +455,11 @@ interface PubSchedule {
   published_at: string;
   assigned_outside_home: boolean;
   shifts: { id: string; kind: ShiftKind; starts_at: string; ends_at: string; arrival_at: string;
-            slots: { slot_key: string; ordinal: number; crew: PubPerson[] }[] }[];
+            slots: { slot_key: string; ordinal: number; crew: PubPerson[]; empty_trainee_positions: number;
+                     operator: { user_id: string; full_name: string; start: string | null; end: string | null } | null }[] }[];
+  // Scheduled participants on the boarding order (סדר עלייה), in order. ambulance is null until placed.
+  boarding: { position: number; shift: ShiftKind; user_id: string; full_name: string; level: PubPerson["level"];
+              is_me: boolean; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }[];
 }
 
 // Active schedules first (nearest date first), then history (most recent first). A date becomes historical
@@ -504,6 +508,13 @@ export function ScheduleView() {
           {sh.slots.map((sl) => (
             <div key={sl.slot_key} className="slot">
               <strong>אמבולנס {sl.ordinal}</strong>
+              {sl.operator && (
+                <div className="operator-line">
+                  <span className="badge">מפעיל/ה</span> <strong>{sl.operator.full_name}</strong>{" "}
+                  <span className="time-range" dir="ltr">{sl.operator.start}{sl.operator.end ? `–${sl.operator.end}` : ""}</span>
+                  {!sl.operator.end && <span className="muted"> עד סוף המשמרת</span>}
+                </div>
+              )}
               {sl.crew.map((p) => (
                 <div key={p.user_id} className="person">
                   {/* Own name only: other volunteers' profiles are for managers (see Profile page). */}
@@ -513,10 +524,33 @@ export function ScheduleView() {
                   {p.phone && <WhatsAppLink phone={p.phone} name={p.full_name} />}
                 </div>
               ))}
+              {/* Unfilled trainee positions on a populated ambulance (boarding is assigned separately). */}
+              {Array.from({ length: sl.empty_trainee_positions }, (_, i) => (
+                <div key={`empty-${i}`} className="person empty-position">
+                  <span className="muted">חניך/ה · פנוי</span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
       ))}
+      {d.boarding.length > 0 && (
+        <section className="card stack">
+          <h3 className="section-title">סדר עלייה</h3>
+          <span className="muted">רשומים למשמרת גם בלי אמבולנס. אמבולנס יופיע כשישובצו.</span>
+          <ol className="boarding-list">
+            {d.boarding.map((b) => (
+              <li key={b.user_id} className="person">
+                <span className="name">{b.full_name}{b.is_me ? " (אני)" : ""}</span>
+                <LevelBadge level={b.level} />
+                <span className="badge">משמרת {SHIFT[b.shift]}</span>
+                {b.is_guest && <span className="badge guest">אורח/ת{b.home_weekday_name ? ` · יום ${b.home_weekday_name}` : ""}</span>}
+                <span className="muted">{b.ambulance ? `אמבולנס ${b.ambulance}` : "ממתין/ה לשיבוץ לאמבולנס"}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
     </Shell>
   );
 }

@@ -1,7 +1,7 @@
 """Volunteer-facing published schedules, personal history and in-app notifications, plus the
 manager board API. Draft endpoints live under /api/manage and require manages_day."""
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -247,6 +247,41 @@ def add_slot(shift_id: uuid.UUID, body: CapacityIn, actor: Actor = Depends(get_a
 def slot_capacity(slot_key: uuid.UUID, body: CapacityIn, actor: Actor = Depends(get_active_actor),
                   db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
     service.set_slot_capacity(db, actor, slot_key, body.capacity, now)
+    return {"ok": True}
+
+
+class BoardingEntryIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: uuid.UUID
+    shift_id: uuid.UUID
+
+
+class BoardingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entries: list[BoardingEntryIn] = Field(max_length=200)  # in boarding order
+
+
+@manage.put("/days/{day_id}/boarding")
+def set_boarding(day_id: uuid.UUID, body: BoardingIn, actor: Actor = Depends(get_active_actor),
+                 db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    """Replace the date's boarding order (סדר עלייה) in the working copy. Trainees only; not an assignment."""
+    service.set_boarding(db, actor, day_id, [(e.user_id, e.shift_id) for e in body.entries], now)
+    return {"saved": len(body.entries)}
+
+
+class OperatorIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user_id: uuid.UUID | None = None  # None clears the operator
+    start: time | None = None
+    end: time | None = None
+
+
+@manage.put("/slots/{slot_key}/operator")
+def set_operator(slot_key: uuid.UUID, body: OperatorIn, actor: Actor = Depends(get_active_actor),
+                 db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    """The volunteer who operates an additional ambulance, from a start time (until the shift ends) or in an
+    explicit range. Draft only."""
+    service.set_slot_operator(db, actor, slot_key, body.user_id, body.start, body.end, now)
     return {"ok": True}
 
 

@@ -11,8 +11,8 @@ from app.core.timeutil import SATURDAY, WEEKDAY_NAMES_HE, local_today, local_wee
 from app.days.models import ActivityDay, Shift
 from app.registration.models import AvailabilityAttention, Invitation, Registration, RegistrationChoice
 from app.registration.service import window_state
-from app.scheduling.models import AmbulanceSlot, Assignment, ScheduleVersion
-from app.scheduling.liveness import live_assignment
+from app.scheduling.models import AmbulanceSlot, Assignment, BoardingEntry, ScheduleVersion
+from app.scheduling.liveness import live_assignment, live_boarding
 from app.scheduling.pool import assigned_by_shift, ordered, people, shift_pools
 from app.scheduling.service import MAX_CAPACITY, current_draft, day_shifts
 
@@ -41,6 +41,25 @@ def _shift_out(s: Shift) -> dict:
             "registration_toggle": s.kind == "morning" and local_weekday(local_today(s.starts_at)) != SATURDAY}
 
 
+# Crew order inside an ambulance (decision 2026-10-16): mentor, then youth volunteer, then trainee positions.
+ROLE_ORDER = {"mentor": 0, "youth": 1, "trainee": 2}
+
+
+def crew_sort_key(person: dict) -> tuple:
+    return (ROLE_ORDER.get(person.get("level"), 3), person["full_name"])
+
+
+def _operator_out(slot: AmbulanceSlot, info: dict) -> dict | None:
+    """The volunteer who operates an additional ambulance: name plus local start (and end) time. Kept apart from
+    the youth volunteer role and from guest labels."""
+    if slot.operator_user_id is None:
+        return None
+    p = info.get(slot.operator_user_id)
+    return {"user_id": str(slot.operator_user_id), "full_name": p.full_name if p else "",
+            "start": slot.operator_start.strftime("%H:%M") if slot.operator_start else None,
+            "end": slot.operator_end.strftime("%H:%M") if slot.operator_end else None}
+
+
 def _home_info(p) -> dict:
     """A guest's actual home weekday, shown next to the name (kept separate from role labels)."""
     wd = p.home_weekday
@@ -60,7 +79,13 @@ def published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetim
                                                         AmbulanceSlot.status == "active")
                             .order_by(AmbulanceSlot.ordinal)))
     assignments = list(db.scalars(select(Assignment).where(Assignment.version_id == version.id, live_assignment())))
-    info = people(db, {a.user_id for a in assignments})
+    boarding = list(db.execute(select(BoardingEntry, Shift.kind).join(Shift, Shift.id == BoardingEntry.shift_id)
+                               .where(BoardingEntry.version_id == version.id, live_boarding(BoardingEntry))
+                               .order_by(BoardingEntry.position)).all())
+    info = people(db, {a.user_id for a in assignments} | {b.user_id for b, _ in boarding}
+                  | {sl.operator_user_id for sl in slots if sl.operator_user_id})
+    ordinal_of = {sl.id: sl.ordinal for sl in slots}
+    placed = {a.user_id: ordinal_of.get(a.slot_id) for a in assignments}
     wd = local_weekday(day.local_date)
     by_slot: dict[uuid.UUID, list] = {}
     for a in assignments:
@@ -79,11 +104,20 @@ def published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetim
             continue
         out_shifts.append({**_shift_out(s), "slots": [
             {"slot_key": str(sl.slot_key), "ordinal": sl.ordinal, "capacity": sl.capacity,
-             "crew": sorted(by_slot[sl.id], key=lambda x: x["full_name"])} for sl in populated]})
+             "crew": sorted(by_slot[sl.id], key=crew_sort_key),
+             # Unfilled trainee positions on a populated ambulance (labelled חניך/ה in the UI).
+             "empty_trainee_positions": max(0, sl.capacity - len(by_slot[sl.id])),
+             "operator": _operator_out(sl, info)} for sl in populated]})
+    boarding_out = [{"position": b.position, "shift": kind, "shift_id": str(b.shift_id),
+                     **_person_out(info[b.user_id], {"is_me": b.user_id == actor.user_id,
+                                                     "is_guest": wd != SATURDAY and info[b.user_id].home_weekday != wd,
+                                                     **_home_info(info[b.user_id])}),
+                     "ambulance": placed.get(b.user_id)}
+                    for b, kind in boarding]
     mine = any(a.user_id == actor.user_id for a in assignments)
     assigned_outside_home = mine and wd != SATURDAY and actor.home_weekday != wd
     return {"day": day_summary(day, now), "revision": version.revision, "published_at": version.published_at,
-            "shifts": out_shifts, "assigned_outside_home": assigned_outside_home}
+            "shifts": out_shifts, "boarding": boarding_out, "assigned_outside_home": assigned_outside_home}
 
 
 def board(db: Session, day: ActivityDay, now: datetime) -> dict:
@@ -112,8 +146,14 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
     cancelled_by_shift: dict[uuid.UUID, list[tuple[uuid.UUID, datetime]]] = {}
     for choice, uid, shift_id in cancelled_rows:
         cancelled_by_shift.setdefault(shift_id, []).append((uid, choice.cancelled_at))
+    # Boarding order (סדר עלייה) of the shown version. Listed trainees are scheduled, so they are not waiting.
+    boarding_rows = list(db.execute(select(BoardingEntry, Shift.kind).join(Shift, Shift.id == BoardingEntry.shift_id)
+                                    .where(BoardingEntry.version_id == shown_id, live_boarding(BoardingEntry))
+                                    .order_by(BoardingEntry.position)).all()) if shown_id else []
+    boarded_ids = {b.user_id for b, _ in boarding_rows}
     all_ids = {u for p in pools.values() for u in p} | {u for m in assigned.values() for u in m} \
-        | {u for rows in cancelled_by_shift.values() for u, _ in rows}
+        | {u for rows in cancelled_by_shift.values() for u, _ in rows} | boarded_ids \
+        | {sl.operator_user_id for sl in slots if sl.operator_user_id}
     info = people(db, all_ids)
     from app.mentoring.service import progress_for  # context only: never a priority formula
     progress = progress_for(db, [u for u, p in info.items() if p.level == "trainee"])
@@ -137,6 +177,8 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
             "progress": progress.get(uid),
         })
 
+    ordinal_of = {sl.id: sl.ordinal for sl in slots}
+    placed_by_user = {a.user_id: ordinal_of.get(a.slot_id) for m in assigned.values() for a in m.values()}
     out_shifts = []
     for s in shifts:
         s_slots = [sl for sl in slots if sl.shift_id == s.id]
@@ -144,10 +186,13 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
         for uid, a in assigned.get(s.id, {}).items():
             crew_by_slot.setdefault(a.slot_id, []).append(person(uid, s.id))
         waiting = [person(e.user_id, s.id) | {"rank": e.rank}
-                   for e in ordered([e for uid, e in pools[s.id].items() if uid not in assigned.get(s.id, {})])]
+                   for e in ordered([e for uid, e in pools[s.id].items()
+                                     if uid not in assigned.get(s.id, {}) and uid not in boarded_ids])]
         out_shifts.append({**_shift_out(s), "slots": [
             {"slot_key": str(sl.slot_key), "ordinal": sl.ordinal, "capacity": sl.capacity, "status": sl.status,
-             "crew": sorted(crew_by_slot.get(sl.id, []), key=lambda x: x["full_name"]),
+             "crew": sorted(crew_by_slot.get(sl.id, []), key=crew_sort_key),
+             "empty_trainee_positions": max(0, sl.capacity - len(crew_by_slot.get(sl.id, []))),
+             "operator": _operator_out(sl, info),
              "warning": capacity_warning(sl.capacity, len(crew_by_slot.get(sl.id, []))) if sl.status == "active" else None,
              # Legacy value above today's limit: kept as is, shown for review (never changed silently).
              "capacity_over_limit": sl.capacity > MAX_CAPACITY}
@@ -155,8 +200,14 @@ def board(db: Session, day: ActivityDay, now: datetime) -> dict:
             "published_crew_count": len(published_assigned.get(s.id, {})),
             "cancelled": [_person_out(info[uid], {"cancelled_at": at.isoformat()})
                           for uid, at in cancelled_by_shift.get(s.id, [])]})
+    boarding_out = [{"position": b.position, "shift": kind, "shift_id": str(b.shift_id),
+                     **_person_out(info[b.user_id], {"is_guest": wd != SATURDAY and info[b.user_id].home_weekday != wd,
+                                                     **_home_info(info[b.user_id])}),
+                     "ambulance": placed_by_user.get(b.user_id)}
+                    for b, kind in boarding_rows]
     published = db.get(ScheduleVersion, day.latest_published_version_id) if day.latest_published_version_id else None
     return {
+        "boarding": boarding_out,
         "day": day_summary(day, now),
         "draft": None if draft is None else {
             "id": str(draft.id), "revision": draft.revision, "edit_count": draft.edit_count,
@@ -199,10 +250,19 @@ def my_history(db: Session, actor: Actor, until: date | None = None) -> list[dic
          .join(AmbulanceSlot, AmbulanceSlot.id == Assignment.slot_id)
          .where(Assignment.user_id == actor.user_id, live_assignment())
          .order_by(ActivityDay.local_date.desc(), Shift.starts_at))
+    # Boarding-order places count as participation too (ambulance None until placed).
+    qb = (select(ActivityDay, Shift)
+          .join(BoardingEntry, BoardingEntry.version_id == ActivityDay.latest_published_version_id)
+          .join(Shift, Shift.id == BoardingEntry.shift_id)
+          .where(BoardingEntry.user_id == actor.user_id, live_boarding(BoardingEntry))
+          .order_by(ActivityDay.local_date.desc(), Shift.starts_at))
+    rows = [(d, s, ordinal) for d, s, ordinal in db.execute(q).all()]
+    rows += [(d, s, None) for d, s in db.execute(qb).all()]
+    rows.sort(key=lambda r: (r[0].local_date, r[1].starts_at, r[2] is None), reverse=True)
     return [{"activity_day_id": str(d.id), "date": d.local_date.isoformat(), "weekday": local_weekday(d.local_date),
              "weekday_name": WEEKDAY_NAMES_HE[local_weekday(d.local_date)], "kind": d.kind, "shift": s.kind,
              "starts_at": s.starts_at, "ends_at": s.ends_at, "ambulance": ordinal}
-            for d, s, ordinal in db.execute(q).all()]
+            for d, s, ordinal in rows]
 
 
 def manager_day_flags(db: Session, days: list[ActivityDay]) -> dict[uuid.UUID, dict]:

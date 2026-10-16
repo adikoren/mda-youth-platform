@@ -22,8 +22,8 @@ from app.notifications.outbox import day_manager_ids, enqueue
 from app.registration.models import Registration, RegistrationChoice
 from app.registration.service import shift_state
 from app.core.timeutil import local_weekday
-from app.scheduling.liveness import is_cancelled, live_assignment
-from app.scheduling.models import AmbulanceSlot, Assignment, AssignmentCancellation
+from app.scheduling.liveness import is_cancelled, live_assignment, live_boarding
+from app.scheduling.models import AmbulanceSlot, Assignment, AssignmentCancellation, BoardingEntry
 from app.scheduling.service import current_draft, lock_day
 
 
@@ -52,13 +52,20 @@ def volunteer_cancel(db: Session, actor: Actor, shift: Shift, now: datetime) -> 
         removed = db.execute(delete(Assignment).where(Assignment.version_id == draft.id,
                                                       Assignment.shift_id == shift.id,
                                                       Assignment.user_id == actor.user_id)).rowcount
+        removed += db.execute(delete(BoardingEntry).where(BoardingEntry.version_id == draft.id,
+                                                          BoardingEntry.shift_id == shift.id,
+                                                          BoardingEntry.user_id == actor.user_id)).rowcount
         result["removed_from_draft"] = bool(removed)
     version_id = day.latest_published_version_id
     if version_id is not None:
         assigned = db.scalar(select(Assignment.id).where(Assignment.version_id == version_id,
                                                          Assignment.shift_id == shift.id,
                                                          Assignment.user_id == actor.user_id))
-        if assigned is not None and not is_cancelled(db, version_id, shift.id, actor.user_id):
+        # A place on the published boarding order is scheduled participation too (cancellable the same way).
+        boarded = db.scalar(select(BoardingEntry.id).where(BoardingEntry.version_id == version_id,
+                                                           BoardingEntry.shift_id == shift.id,
+                                                           BoardingEntry.user_id == actor.user_id))
+        if (assigned is not None or boarded is not None) and not is_cancelled(db, version_id, shift.id, actor.user_id):
             db.add(AssignmentCancellation(version_id=version_id, shift_id=shift.id, user_id=actor.user_id,
                                           cancelled_at=now))
             db.flush()
@@ -78,18 +85,26 @@ def volunteer_cancel(db: Session, actor: Actor, shift: Shift, now: datetime) -> 
 
 
 def next_assignment(db: Session, actor: Actor, now: datetime) -> dict | None:
-    """The nearest live published assignment that has not ended (an active shift counts)."""
-    row = db.execute(
+    """The nearest live published participation that has not ended (an active shift counts): an ambulance
+    placement, or a place on the boarding order (ambulance None until placed)."""
+    assigned = db.execute(
         select(Shift, ActivityDay, AmbulanceSlot.ordinal)
         .join(ActivityDay, ActivityDay.id == Shift.activity_day_id)
         .join(Assignment, and_(Assignment.version_id == ActivityDay.latest_published_version_id,
                                Assignment.shift_id == Shift.id))
         .join(AmbulanceSlot, AmbulanceSlot.id == Assignment.slot_id)
-        .where(Assignment.user_id == actor.user_id, Shift.ends_at > now, live_assignment())
-        .order_by(Shift.starts_at).limit(1)).first()
-    if row is None:
+        .where(Assignment.user_id == actor.user_id, Shift.ends_at > now, live_assignment())).all()
+    boarded = db.execute(
+        select(Shift, ActivityDay)
+        .join(ActivityDay, ActivityDay.id == Shift.activity_day_id)
+        .join(BoardingEntry, and_(BoardingEntry.version_id == ActivityDay.latest_published_version_id,
+                                  BoardingEntry.shift_id == Shift.id))
+        .where(BoardingEntry.user_id == actor.user_id, Shift.ends_at > now, live_boarding(BoardingEntry))).all()
+    candidates = [(s, d, o) for s, d, o in assigned] + [(s, d, None) for s, d in boarded]
+    if not candidates:
         return None
-    s, d, ordinal = row
+    # Earliest start first; on the same shift, the ambulance placement is shown rather than the bare listing.
+    s, d, ordinal = min(candidates, key=lambda c: (c[0].starts_at, c[2] is None))
     return {"activity_day_id": str(d.id), "shift_id": str(s.id), "date": d.local_date.isoformat(),
             "weekday": local_weekday(d.local_date), "kind": s.kind, "starts_at": s.starts_at, "ends_at": s.ends_at,
             "ambulance": ordinal, "state": shift_state(s, now),

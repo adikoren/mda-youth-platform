@@ -1,8 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
 from sqlalchemy import (
     CheckConstraint,
+    Time,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -64,6 +65,11 @@ class AmbulanceSlot(Base):
     ordinal: Mapped[int] = mapped_column(SmallInteger)
     capacity: Mapped[int] = mapped_column(SmallInteger, default=3)
     status: Mapped[str] = mapped_column(String(16), default="active")
+    # Additional ambulance operated by a volunteer (decision 2026-10-16). Optional. Start only = from that time
+    # until the end of the shift; start and end = the explicit range.
+    operator_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    operator_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    operator_end: Mapped[time | None] = mapped_column(Time, nullable=True)
 
 
 class Assignment(Base):
@@ -104,3 +110,18 @@ class AssignmentCancellation(Base):
     shift_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shifts.id"))
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     cancelled_at: Mapped[datetime] = tstz()
+
+
+class BoardingEntry(Base):
+    """The trainee boarding order (סדר עלייה) of one schedule version. Membership is scheduled participation
+    even without an ambulance. Rows belong to a version: the working copy is editable, and a published version
+    keeps its list."""
+
+    __tablename__ = "boarding_entries"
+    __table_args__ = (UniqueConstraint("version_id", "user_id"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("schedule_versions.id"), index=True)
+    shift_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shifts.id"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    position: Mapped[int] = mapped_column(SmallInteger)

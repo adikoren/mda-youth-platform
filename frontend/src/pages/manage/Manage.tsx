@@ -4,6 +4,10 @@ import { api, type DaySummary, type Level, type ShiftKind } from "../../api";
 import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime } from "../../he";
 import { LevelBadge, Loading, Shell, TimeRange, errorText, useLoad } from "../../ui";
 
+// Ordered boarding list entry (סדר עלייה). Being on the list is scheduled participation.
+interface BoardingRow { position: number; shift: ShiftKind; shift_id: string; user_id: string; full_name: string;
+  level: Level | null; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }
+
 export function ManageDays() {
   const days = useLoad(() => api.get<DaySummary[]>("/api/manage/days"));
   return (
@@ -45,13 +49,14 @@ interface Person {
   progress?: { ride_count: number; last_ride_date: string | null } | null;
 }
 interface Slot { slot_key: string; ordinal: number; capacity: number; status: "active" | "cancelled"; crew: Person[]; warning: string | null;
-  capacity_over_limit?: boolean }
+  capacity_over_limit?: boolean; operator: { user_id: string; full_name: string; start: string | null; end: string | null } | null }
 // Upper bound for the capacity setting (the backend enforces it too). More crew than capacity is still allowed.
 const MAX_CAPACITY = 3;
 interface BoardShift { id: string; kind: ShiftKind; starts_at: string; ends_at: string; arrival_at: string; slots: Slot[]; waiting: Person[]; cancelled: (Person & { cancelled_at: string })[];
   self_selectable: boolean; registration_toggle: boolean }
 interface Board {
   day: DaySummary;
+  boarding: BoardingRow[];
   draft: { id: string; revision: number; edit_count: number; dirty: boolean; last_edit_at: string | null } | null;
   published: { id: string; revision: number; published_at: string } | null;
   shifts: BoardShift[];
@@ -87,6 +92,22 @@ export function BoardPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Local, unsaved boarding order. It follows the server only when the saved list itself changes, so other
+  // actions in the board do not discard it.
+  const [boardingDraft, setBoardingDraft] = useState<BoardingRow[]>([]);
+  const serverBoarding = JSON.stringify(board?.boarding ?? []);
+  useEffect(() => {
+    setBoardingDraft(board?.boarding ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverBoarding]);
+  const boardingDirty = JSON.stringify(boardingDraft.map((e) => [e.user_id, e.shift_id])) !==
+    JSON.stringify((board?.boarding ?? []).map((e) => [e.user_id, e.shift_id]));
+
+  // Everyone on this date's board: candidates for the operating volunteer of an additional ambulance.
+  const allPeople: Person[] = board ? Array.from(new Map(
+    board.shifts.flatMap((sh) => [...sh.waiting, ...sh.slots.flatMap((sl) => sl.crew)]).map((p) => [p.user_id, p])
+  ).values()) : [];
 
   const dirty = !!board?.draft?.dirty;
   useEffect(() => {
@@ -205,6 +226,62 @@ export function BoardPage() {
         );
       })()}
 
+      <section className="card stack">
+        <strong>סדר עלייה ({boardingDraft.length})</strong>
+        <span className="muted">רשימת חניכים לפי סדר העלייה. הרשומים מתוכננים למשמרת גם בלי אמבולנס. בחירת אמבולנס היא נפרדת.</span>
+        {boardingDraft.length === 0 && <span className="muted">אין חניכים ברשימה עדיין</span>}
+        {boardingDraft.map((e, i) => (
+          <div key={e.user_id} className="person">
+            <span className="muted">{i + 1}.</span>
+            <Link className="name person-link" to={`/people/${e.user_id}`}>{e.full_name}</Link>
+            <LevelBadge level={e.level} />
+            {e.is_guest && <span className="badge guest">אורח/ת{e.home_weekday_name ? ` · יום ${e.home_weekday_name}` : ""}</span>}
+            <span className="badge">משמרת {SHIFT[e.shift]}</span>
+            <span className="muted">{e.ambulance ? `אמבולנס ${e.ambulance}` : "ממתין/ה לשיבוץ לאמבולנס"}</span>
+            <button className="btn small ghost" aria-label="הזזה למעלה" disabled={i === 0}
+                    onClick={() => setBoardingDraft(moveRow(boardingDraft, i, i - 1))}>▲</button>
+            <button className="btn small ghost" aria-label="הזזה למטה" disabled={i === boardingDraft.length - 1}
+                    onClick={() => setBoardingDraft(moveRow(boardingDraft, i, i + 1))}>▼</button>
+            <button className="btn small ghost" onClick={() => setBoardingDraft(boardingDraft.filter((_, j) => j !== i))}>הוצאה</button>
+          </div>
+        ))}
+        {(() => {
+          // Candidates: trainees waiting for a shift of this date. Evening first (priority order); reinforcement last.
+          const listed = new Set(boardingDraft.map((e) => e.user_id));
+          const candidates: { p: Person; shift: ShiftKind; shift_id: string }[] = [];
+          for (const kind of ["evening", "reinforcement"] as ShiftKind[]) {
+            for (const sh of board.shifts.filter((x) => x.kind === kind)) {
+              for (const p of sh.waiting) {
+                if (p.level === "trainee" && !listed.has(p.user_id) && !candidates.some((c) => c.p.user_id === p.user_id)) {
+                  candidates.push({ p, shift: kind, shift_id: sh.id });
+                }
+              }
+            }
+          }
+          if (candidates.length === 0) return <span className="muted">אין חניכים ממתינים שאפשר להוסיף</span>;
+          return (
+            <label className="field">
+              הוספת חניך/ה לסדר העלייה
+              <select value="" onChange={(ev) => {
+                const c = candidates.find((x) => x.p.user_id === ev.target.value);
+                if (c) setBoardingDraft([...boardingDraft, { position: 0, shift: c.shift, shift_id: c.shift_id,
+                  user_id: c.p.user_id, full_name: c.p.full_name, level: c.p.level, is_guest: c.p.is_guest,
+                  home_weekday_name: c.p.home_weekday_name, ambulance: null }]);
+              }}>
+                <option value="">בחירה…</option>
+                {candidates.map((c) => <option key={c.p.user_id} value={c.p.user_id}>{c.p.full_name} · משמרת {SHIFT[c.shift]}</option>)}
+              </select>
+            </label>
+          );
+        })()}
+        <div className="row">
+          <button className="btn primary small" disabled={!boardingDirty} onClick={() => act(
+            () => api.put(`/api/manage/days/${dayId}/boarding`, { entries: boardingDraft.map((e) => ({ user_id: e.user_id, shift_id: e.shift_id })) }),
+            "סדר העלייה נשמר")}>שמירת סדר העלייה</button>
+          {boardingDirty && <span className="muted">יש שינויים שלא נשמרו</span>}
+        </div>
+      </section>
+
       {board.shifts.map((sh) => (
         <div key={sh.id} className="card stack">
           <div className="row spread">
@@ -231,6 +308,16 @@ export function BoardPage() {
           )}
           {sh.slots.map((sl) => (
             <div key={sl.slot_key} className={`slot ${sl.status === "cancelled" ? "cancelled" : ""}`}>
+              {sl.operator && (
+                <div className="operator-line">
+                  <span className="badge">מפעיל/ה</span> <strong>{sl.operator.full_name}</strong>{" "}
+                  <span className="time-range" dir="ltr">{sl.operator.start}{sl.operator.end ? `–${sl.operator.end}` : ""}</span>
+                  {!sl.operator.end && <span className="muted"> עד סוף המשמרת</span>}
+                </div>
+              )}
+              {sl.status === "active" && (
+                <OperatorForm slotKey={sl.slot_key} current={sl.operator} candidates={allPeople} run={act} />
+              )}
               <div className="row spread">
                 <strong>אמבולנס {sl.ordinal}{sl.status === "cancelled" ? " · מבוטל בטיוטה" : ""}</strong>
                 <span className="row">
@@ -297,7 +384,12 @@ export function BoardPage() {
                 <select aria-label="שיבוץ" value="" onChange={(e) => e.target.value &&
                   act(() => api.post(`/api/manage/slots/${e.target.value}/assign`, { user_id: p.user_id }))}>
                   <option value="">שבץ…</option>
-                  {allSlots(sh).map((o) => <option key={o.slot_key} value={o.slot_key}>אמבולנס {o.ordinal}</option>)}
+                  {/* Operational boarding priority: regular ambulances first; operated ones after, from their start time. */}
+                  {[...allSlots(sh)].sort((a, b) => Number(!!a.operator) - Number(!!b.operator)).map((o) => (
+                    <option key={o.slot_key} value={o.slot_key}>
+                      {o.operator ? `אמבולנס ${o.ordinal} · מופעל/ת ${o.operator.full_name} מ-${o.operator.start}` : `אמבולנס ${o.ordinal}`}
+                    </option>
+                  ))}
                 </select>
                 {p.source === "manager" && (
                   <button className="btn small ghost" onClick={() => act(() => api.del(`/api/manage/shifts/${sh.id}/participants/${p.user_id}`))}>הוצאה</button>
@@ -324,6 +416,54 @@ export function BoardPage() {
       </div>
     </Shell>
   );
+}
+
+// Operating volunteer of an additional ambulance: a name, a start time (until the end of the shift) and optionally
+// an explicit end time. Kept apart from the youth role and the guest labels.
+function OperatorForm({ slotKey, current, candidates, run }: {
+  slotKey: string; current: Slot["operator"]; candidates: Person[];
+  run: (fn: () => Promise<unknown>, okText?: string) => Promise<unknown>;
+}) {
+  const [uid, setUid] = useState(current?.user_id ?? "");
+  const [start, setStart] = useState(current?.start ?? "");
+  const [end, setEnd] = useState(current?.end ?? "");
+  return (
+    <details className="operator-form">
+      <summary>מפעיל/ה לאמבולנס</summary>
+      <div className="stack">
+        <label className="field">
+          מתנדב/ת מפעיל/ה
+          <select value={uid} onChange={(e) => setUid(e.target.value)}>
+            <option value="">ללא מפעיל/ה</option>
+            {candidates.map((p) => <option key={p.user_id} value={p.user_id}>{p.full_name}</option>)}
+          </select>
+        </label>
+        <label className="field">
+          שעת התחלה
+          <input type="time" dir="ltr" value={start} onChange={(e) => setStart(e.target.value)} />
+        </label>
+        <label className="field">
+          שעת סיום (לא חובה: בלי סיום, עד סוף המשמרת)
+          <input type="time" dir="ltr" value={end} onChange={(e) => setEnd(e.target.value)} />
+        </label>
+        <div className="row">
+          <button className="btn small primary" disabled={!uid || !start}
+                  onClick={() => run(() => api.put(`/api/manage/slots/${slotKey}/operator`,
+                    { user_id: uid, start, end: end || null }), "המפעיל/ה נשמר/ה")}>שמירה</button>
+          <button className="btn small ghost" disabled={!current}
+                  onClick={() => run(() => api.put(`/api/manage/slots/${slotKey}/operator`,
+                    { user_id: null, start: null, end: null }), "המפעיל/ה הוסר/ה")}>הסרה</button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function moveRow(list: BoardingRow[], from: number, to: number): BoardingRow[] {
+  const copy = [...list];
+  const [item] = copy.splice(from, 1);
+  copy.splice(to, 0, item);
+  return copy;
 }
 
 function reorder(list: Person[], from: number, to: number): string[] {

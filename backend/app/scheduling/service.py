@@ -6,7 +6,7 @@ cross-slot rules (same person twice in a shift, trainee reinforcement+evening) a
 a stable state. The unique constraint uq_assignment_person_shift is the database safety net.
 Capacity is informational only (soft warning)."""
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -27,8 +27,8 @@ from app.registration.models import (
     ManagerAddedParticipant,
     QueueOrder,
 )
-from app.scheduling.models import AmbulanceSlot, Assignment, ScheduleVersion
-from app.scheduling.liveness import live_assignment
+from app.scheduling.models import AmbulanceSlot, Assignment, BoardingEntry, ScheduleVersion
+from app.scheduling.liveness import live_assignment, live_boarding
 from app.scheduling.pool import assigned_by_shift, shift_pools
 
 DEFAULT_CAPACITY = 3
@@ -105,7 +105,9 @@ def _ensure_draft_locked(db: Session, day: ActivityDay, actor_id: uuid.UUID | No
         slot_map: dict[uuid.UUID, uuid.UUID] = {}
         for s in db.scalars(select(AmbulanceSlot).where(AmbulanceSlot.version_id == base_id)):
             new = AmbulanceSlot(id=uuid.uuid4(), version_id=draft.id, shift_id=s.shift_id, slot_key=s.slot_key,
-                                ordinal=s.ordinal, capacity=s.capacity, status=s.status)
+                                ordinal=s.ordinal, capacity=s.capacity, status=s.status,
+                                operator_user_id=s.operator_user_id, operator_start=s.operator_start,
+                                operator_end=s.operator_end)
             slot_map[s.id] = new.id
             db.add(new)
         db.flush()
@@ -114,6 +116,8 @@ def _ensure_draft_locked(db: Session, day: ActivityDay, actor_id: uuid.UUID | No
             db.add(Assignment(version_id=draft.id, shift_id=a.shift_id, slot_id=slot_map[a.slot_id],
                               user_id=a.user_id, created_at=a.created_at, created_by_id=a.created_by_id))
         # A shift type added after the last publication has no ambulances in the base: give it its baseline here.
+        for b in db.scalars(select(BoardingEntry).where(BoardingEntry.version_id == base_id, live_boarding(BoardingEntry))):
+            db.add(BoardingEntry(version_id=draft.id, shift_id=b.shift_id, user_id=b.user_id, position=b.position))
         in_base = {s.shift_id for s in db.scalars(select(AmbulanceSlot).where(AmbulanceSlot.version_id == base_id))}
         for shift in day_shifts(db, day.id):
             if shift.id not in in_base:
@@ -445,6 +449,9 @@ def resolve_attention(db: Session, actor: Actor, attention_id: uuid.UUID, now: d
 
 # ---------------- publication ----------------
 
+BOARDING = "boarding"  # snapshot marker: scheduled on the boarding order, no ambulance
+
+
 def _snapshot(db: Session, version_id: uuid.UUID | None) -> tuple[dict, dict]:
     """(shift_id -> {user_id: slot_key}, shift_id -> {active slot_key: capacity})"""
     people: dict[uuid.UUID, dict[uuid.UUID, uuid.UUID]] = {}
@@ -458,6 +465,9 @@ def _snapshot(db: Session, version_id: uuid.UUID | None) -> tuple[dict, dict]:
             slots.setdefault(s.shift_id, {})[s.slot_key] = s.capacity
     for a in db.scalars(select(Assignment).where(Assignment.version_id == version_id)):
         people.setdefault(a.shift_id, {})[a.user_id] = key_of[a.slot_id]
+    # A trainee on the boarding order is scheduled even without an ambulance. Ambulance placement takes precedence.
+    for b in db.scalars(select(BoardingEntry).where(BoardingEntry.version_id == version_id, live_boarding(BoardingEntry))):
+        people.setdefault(b.shift_id, {}).setdefault(b.user_id, BOARDING)
     return people, slots
 
 
@@ -499,6 +509,57 @@ def add_shift_type(db: Session, actor: Actor, day_id: uuid.UUID, kind: str, now:
            meta={"date": day.local_date.isoformat(), "kind": kind, "notified": len(recipients)})
     db.commit()
     return shift
+
+
+def set_slot_operator(db: Session, actor: Actor, slot_key: uuid.UUID, user_id: uuid.UUID | None,
+                      start: time | None, end: time | None, now: datetime) -> None:
+    """Records the volunteer who operates an additional ambulance (decision 2026-10-16). Start only means from
+    that time until the end of the shift; start and end give the explicit range. Local (Asia/Jerusalem) times.
+    user_id None clears the operator. Draft only."""
+    from app.core.timeutil import to_local
+    _, draft = _begin_edit(db, actor, _slot_day_id(db, slot_key), now)
+    slot = _draft_slot(db, draft, slot_key)
+    if user_id is None:
+        slot.operator_user_id, slot.operator_start, slot.operator_end = None, None, None
+    else:
+        _check_assignable_user(db, user_id)
+        if start is None:
+            raise bad_request("operator_start_required", "יש להזין שעת התחלה למפעיל/ה")
+        shift = _shift(db, slot.shift_id)
+        s_local, e_local = to_local(shift.starts_at).time(), to_local(shift.ends_at).time()
+        if not (s_local <= start < e_local):
+            raise bad_request("operator_outside_shift", "שעת ההתחלה חייבת להיות בתוך המשמרת")
+        if end is not None and not (start < end <= e_local):
+            raise bad_request("operator_bad_range", "שעת הסיום חייבת להיות אחרי ההתחלה ולא אחרי סיום המשמרת")
+        slot.operator_user_id, slot.operator_start, slot.operator_end = user_id, start, end
+    record(db, actor_id=actor.user_id, action="draft_slot_operator", object_type="schedule_version",
+           object_id=draft.id, now=now, meta={"slot_key": str(slot_key), "operator": str(user_id) if user_id else None})
+    db.commit()
+
+
+def set_boarding(db: Session, actor: Actor, day_id: uuid.UUID, entries: list[tuple[uuid.UUID, uuid.UUID]],
+                 now: datetime) -> None:
+    """Replaces the date's boarding order (סדר עלייה) in the working copy. entries are (user_id, shift_id) in
+    boarding order. Only trainees, only evening or reinforcement shifts of this date, no duplicates. Being on
+    the list is scheduled participation; it does not assign an ambulance."""
+    day, draft = _begin_edit(db, actor, day_id, now)
+    shifts = {s.id: s for s in day_shifts(db, day.id)}
+    seen: set[uuid.UUID] = set()
+    for user_id, shift_id in entries:
+        if shift_id not in shifts or shifts[shift_id].kind not in ("evening", "reinforcement"):
+            raise bad_request("boarding_shift", "סדר העלייה מיועד למשמרת ערב או תגבור של היום")
+        if user_id in seen:
+            raise bad_request("boarding_duplicate", "אותו חניך/ה מופיע פעמיים בסדר העלייה")
+        seen.add(user_id)
+        if _check_assignable_user(db, user_id) != "trainee":
+            raise bad_request("boarding_not_trainee", "בסדר העלייה ניתן לרשום חניכים בלבד")
+    db.execute(delete(BoardingEntry).where(BoardingEntry.version_id == draft.id))
+    db.flush()
+    for position, (user_id, shift_id) in enumerate(entries, start=1):
+        db.add(BoardingEntry(version_id=draft.id, shift_id=shift_id, user_id=user_id, position=position))
+    record(db, actor_id=actor.user_id, action="draft_boarding", object_type="schedule_version", object_id=draft.id,
+           now=now, meta={"count": len(entries)})
+    db.commit()
 
 
 def publish(db: Session, actor: Actor, day_id: uuid.UUID, draft_id: uuid.UUID, expected_edit_count: int,
