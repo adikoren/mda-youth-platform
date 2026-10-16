@@ -64,7 +64,7 @@ export function BoardPage() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
-  const [requests, setRequests] = useState<{ id: string; full_name: string; message: string; status: string; created_at: string; resolved_at: string | null }[]>([]);
+  const [requests, setRequests] = useState<{ id: string; full_name: string; message: string; shift: string | null; status: string; created_at: string; resolved_at: string | null }[]>([]);
 
   const loadRequests = useCallback(async () => {
     try {
@@ -146,7 +146,7 @@ export function BoardPage() {
       {requests.filter((q) => q.status === "pending").map((q) => (
         <div key={q.id} className="card stack">
           <div className="row spread">
-            <span><strong>{q.full_name}</strong> · בקשה להרשמה</span>
+            <span><strong>{q.full_name}</strong> · בקשה להרשמה{q.shift ? ` · משמרת ${SHIFT[q.shift as keyof typeof SHIFT]}` : ""}</span>
             <button className="btn small" onClick={async () => {
               await act(() => api.post(`/api/manage/requests/${q.id}/resolve`), "סומן כטופל");
               await loadRequests();

@@ -215,6 +215,15 @@ Date: 2026-10-12 (milestones A, B and C; D-27 decided, D-43–D-45 added the sam
   - **Label change:** the request button is now "בקשה להרשמה באיחור" (replacing "שליחת בקשה לאחראי" on the button only). The form's submit ("שליחה לאחראי") and the success text ("הבקשה נשלחה לאחראי") are unchanged.
   - **Open decision:** the API still accepts direct late changes by volunteers and day managers (approved in the original spec: "first late registration and all late edits allowed, notify manager"). The screen now locks them, so the two disagree. Choose: (a) the API also refuses direct changes after closing (except Admin), or (b) keep the API rule and make the screen consistent with it again.
 
+- **D-57 Per-shift cutoff at the shift start** (2026-10-16).
+  - **Rule:** each shift closes for volunteers at its own start instant (`starts_at`, Asia/Jerusalem wall clock stored as UTC). From then on, neither a registration change nor a late request is accepted for that shift. A shift ends at `ends_at`.
+  - **Enforcement:** the backend refuses at the boundary (409 `shift_started` "המשמרת כבר התחילה" or `shift_ended` "המשמרת הסתיימה"). The frontend renders the server's per-shift state and never judges time itself. A request form left open past the start is refused at submit; the screen then refreshes and closes the form.
+  - **Requests now name a shift** (migration 0006, nullable column; older day-level requests keep null). A request is for one shift, and the form offers only shifts that have not started. Duplicate detection is per shift.
+  - **Screen:** a started shift shows "המשמרת כבר התחילה" and no answer buttons; an ended shift shows "המשמרת הסתיימה". A day row offers "להרשמה למשמרת" only while registration is open and some shift has not started; otherwise "פתיחה".
+  - **Admin** keeps direct management of registrations after a shift starts (D-53).
+  - **Tests:** boundaries at 14:59:59, 15:00:00 and 15:00:01 (answers and requests), the end at 22:59:59 and 23:00:00, per-shift independence on a Saturday, a form open across the start, Admin's override, and the stored instants across the 25 Oct DST change (12:00 UTC before, 13:00 UTC after).
+  - **Open:** the API still accepts volunteers' direct changes between registration closing and the shift start (D-56). Only the start itself is a hard cutoff so far.
+
 ## Not built yet
 
 - **D:** PWA manifest and service worker, a real Web Push provider and an iPhone/Android trial, password recovery, a holiday data source, photos, backup/restore, deployment.

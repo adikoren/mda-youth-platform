@@ -9,7 +9,7 @@ from sqlalchemy import func, select, text
 
 from app.notifications.models import OutboxMessage
 from tests.conftest import Client, at
-from tests.helpers import register
+from tests.helpers import board, register, shift
 
 THU = "2026-10-15"
 CLOSED = "2026-10-14"  # Thursday registration closed on 13.10 at 18:00; the date has not ended yet
@@ -21,9 +21,14 @@ def counts(db):
             db.scalar(text("select count(*) from audit_events where action = 'registration_request'")))
 
 
-def submit(client, world, message="אני לא יכול להגיע, אפשר להחליף?", request_id=None):
+def evening_shift(world):
+    return shift(board(Client("thu.mgr@x.test"), world.day(THU)), "evening")["id"]
+
+
+def submit(client, world, message="אני לא יכול להגיע, אפשר להחליף?", request_id=None, shift_id=None):
     rid = request_id or str(uuid.uuid4())
-    return rid, client.post(f"/api/registrations/{world.day(THU)}/requests", {"id": rid, "message": message})
+    body = {"id": rid, "message": message, "shift_id": shift_id or evening_shift(world)}
+    return rid, client.post(f"/api/registrations/{world.day(THU)}/requests", body)
 
 
 def test_opening_the_closed_screen_creates_nothing(world, db, clock):
@@ -154,7 +159,7 @@ def test_identical_pending_request_is_refused_until_confirmed(world, db, clock):
     assert ok.status_code == 409  # still refused without the flag
     rid = str(uuid.uuid4())
     r = vol.post(f"/api/registrations/{world.day(THU)}/requests",
-                 {"id": rid, "message": "אפשר להחליף משמרת?", "confirm_duplicate": True})
+                 {"id": rid, "message": "אפשר להחליף משמרת?", "shift_id": evening_shift(world), "confirm_duplicate": True})
     assert r.status_code == 201 and counts(db)[1] == 2
 
 

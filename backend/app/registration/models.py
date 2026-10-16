@@ -130,6 +130,8 @@ class RegistrationRequest(Base):
     id: Mapped[uuid.UUID] = uuid_pk()  # client-generated, so a retried submit is recognised
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     activity_day_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activity_days.id"), index=True)
+    # The shift the request is about. Null only for requests made before per-shift requests existed.
+    shift_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("shifts.id"), index=True)
     message: Mapped[str] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(16), default="pending")
     created_at: Mapped[datetime] = tstz()

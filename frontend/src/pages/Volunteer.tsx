@@ -17,8 +17,11 @@ interface RegShift {
   available: boolean | null;
   arrival_time: string | null;
   is_late: boolean;
+  // Server's view of the shift's own cutoff: before its start, started, or ended.
+  state: "before" | "started" | "ended";
 }
 interface Reg {
+  server_now: string;
   requests?: { id: string; status: string; created_at: string }[];
   activity_day_id: string;
   date: string;
@@ -47,6 +50,10 @@ function regStatus(r: Reg, invited = false): RegStatus {
   if (r.window === "not_open") return { tone: "wait", label: "טרם נפתחה" };
   if (yes.length) return { tone: "done", label: `נרשמת · ${yes.join(" + ")}` };
   if (answered) return { tone: "no", label: "סימנת: לא מגיע/ה" };
+  if (r.shifts.length && !r.shifts.some((s) => s.state === "before")) {
+    const allEnded = r.shifts.every((s) => s.state === "ended");
+    return { tone: "wait", label: allEnded ? "המשמרת הסתיימה" : "המשמרת כבר התחילה" };
+  }
   if (invited) return { tone: "todo", label: "הוזמנת להירשם" };
   if (r.window === "closed_late_allowed") return { tone: "late", label: "נסגרה" };
   return { tone: "todo", label: "טרם סימנת" };
@@ -143,7 +150,7 @@ export function Home() {
                 </span>
                 <span className="reg-end">
                   <span className={`status status-${st.tone}`}>{st.label}</span>
-                  {r.window === "open" ? (
+                  {r.window === "open" && r.shifts.some((s) => s.state === "before") ? (
                     <Link className="btn primary small" to={`/register/${r.activity_day_id}`} aria-label={`להרשמה למשמרת ${label}`}>
                       להרשמה למשמרת
                     </Link>
@@ -204,6 +211,7 @@ export function RegisterDay() {
   const [reqId, setReqId] = useState<string | null>(null); // same id on retry, so a retry never duplicates
   const [reqSending, setReqSending] = useState(false);
   const [reqErr, setReqErr] = useState<string | null>(null);
+  const [reqShift, setReqShift] = useState<string>("");
   const [reqDuplicate, setReqDuplicate] = useState(false); // an identical request is still pending
 
   function openRequest() {
@@ -219,15 +227,26 @@ export function RegisterDay() {
     setReqErr(null);
     try {
       await api.post(`/api/registrations/${dayId}/requests`,
-                     { id: reqId, message: reqText, confirm_duplicate: confirmDuplicate });
+                     { id: reqId, message: reqText, shift_id: reqShift, confirm_duplicate: confirmDuplicate });
       setReqOpen(false);
       setReqText("");
       setReqId(null);
       setReqDuplicate(false);
       reg.reload();
     } catch (e) {
-      if (e instanceof ApiError && e.code === "duplicate_request") setReqDuplicate(true);
-      else setReqErr(errorText(e));
+      if (e instanceof ApiError && e.code === "duplicate_request") {
+        setReqDuplicate(true);
+      } else if (e instanceof ApiError && (e.code === "shift_started" || e.code === "shift_ended")) {
+        // The shift started while the form was open: the server refused, so refresh and close the form.
+        setReqOpen(false);
+        setReqText("");
+        setReqId(null);
+        setReqDuplicate(false);
+        setErr(e.code === "shift_started" ? "המשמרת כבר התחילה. לא ניתן לשלוח בקשה להרשמה." : "המשמרת הסתיימה. לא ניתן לשלוח בקשה להרשמה.");
+        reg.reload();
+      } else {
+        setReqErr(errorText(e));
+      }
     } finally {
       setReqSending(false);
     }
@@ -261,6 +280,10 @@ export function RegisterDay() {
   // After closing, volunteers cannot change answers directly; they send a request instead.
   // Admin keeps direct management of the registration (DECISIONS D-53).
   const editable = r.window === "open" || (r.window === "closed_late_allowed" && !!me?.is_admin);
+  const isAdmin = !!me?.is_admin;
+  // A shift can be answered only before its own start (Admin keeps direct management).
+  const canAnswer = (s: RegShift) => editable && (s.state === "before" || isAdmin);
+  const requestShifts = r.shifts.filter((s) => s.state === "before");
   return (
     <Shell title="הרשמה למשמרת" back="/">
       <section className="day-head">
@@ -271,12 +294,15 @@ export function RegisterDay() {
           {r.window === "not_open" ? `נפתחת ${fmtDateTime(r.opens_at)}` : `נסגרת ${fmtDateTime(r.closes_at)}`}
         </span>
       </section>
-      {r.window === "closed_late_allowed" && (
+      {r.window === "closed_late_allowed" && requestShifts.length > 0 && (
         <div className="notice">ההרשמה נסגרה. לבקשה להרשמה באיחור, השתמשו בכפתור למטה.</div>
+      )}
+      {r.window === "closed_late_allowed" && requestShifts.length === 0 && (
+        <div className="notice">ההרשמה נסגרה.</div>
       )}
       {r.window === "not_open" && <div className="notice">ההרשמה טרם נפתחה.</div>}
       {err && <div className="error" role="alert">{err}</div>}
-      {r.window === "closed_late_allowed" && (
+      {r.window === "closed_late_allowed" && requestShifts.length > 0 && (
         <section className="request-box stack">
           {(r.requests?.length ?? 0) > 0 && (
             <div className="stack" style={{ gap: 2 }}>
@@ -285,9 +311,17 @@ export function RegisterDay() {
             </div>
           )}
           {!reqOpen ? (
-            <button className="btn" onClick={openRequest}>בקשה להרשמה באיחור</button>
+            <button className="btn" onClick={() => { openRequest(); setReqShift(requestShifts[0].shift_id); }}>בקשה להרשמה באיחור</button>
           ) : (
             <div className="stack">
+              {requestShifts.length > 1 && (
+                <label className="field">
+                  לאיזו משמרת?
+                  <select value={reqShift} disabled={reqSending} onChange={(e) => setReqShift(e.target.value)}>
+                    {requestShifts.map((s) => <option key={s.shift_id} value={s.shift_id}>משמרת {SHIFT[s.kind]}</option>)}
+                  </select>
+                </label>
+              )}
               <label className="field">
                 הבקשה לאחראי
                 <textarea rows={3} maxLength={1000} value={reqText} disabled={reqSending}
@@ -303,7 +337,7 @@ export function RegisterDay() {
                 </div>
               ) : (
                 <div className="row">
-                  <button className="btn primary" disabled={reqSending || reqText.trim().length < 2} onClick={() => sendRequest(false)}>
+                  <button className="btn primary" disabled={reqSending || reqText.trim().length < 2 || !reqShift} onClick={() => sendRequest(false)}>
                     {reqErr ? "ניסיון נוסף" : "שליחה לאחראי"}
                   </button>
                   <button className="btn ghost" disabled={reqSending} onClick={() => setReqOpen(false)}>ביטול</button>
@@ -323,21 +357,26 @@ export function RegisterDay() {
             <span className="shift-time">{fmtTime(s.starts_at)}–{fmtTime(s.ends_at)}</span>
           </div>
           <span className="muted">הגעה {fmtTime(s.arrival_at)}</span>
+          {!canAnswer(s) && (
+            <span className="status status-wait">{s.state === "ended" ? "המשמרת הסתיימה" : s.state === "started" ? "המשמרת כבר התחילה" : "ההרשמה נסגרה"}</span>
+          )}
+          {canAnswer(s) && (
           <div className="segmented" role="group" aria-label={`הרשמה למשמרת ${SHIFT[s.kind]}`}>
-            <button className="seg yes" aria-pressed={s.available === true} disabled={!editable || busy === s.shift_id}
+            <button className="seg yes" aria-pressed={s.available === true} disabled={busy === s.shift_id}
                     onClick={() => save(s, true, s.arrival_time)}>
               <span aria-hidden>✓</span> מגיע/ה
             </button>
-            <button className="seg no" aria-pressed={s.available === false} disabled={!editable || busy === s.shift_id}
+            <button className="seg no" aria-pressed={s.available === false} disabled={busy === s.shift_id}
                     onClick={() => save(s, false)}>
               <span aria-hidden>✕</span> לא מגיע/ה
             </button>
           </div>
-          {s.allows_late_arrival && s.available && (
+          )}
+          {canAnswer(s) && s.allows_late_arrival && s.available && (
             lateOpen || s.arrival_time ? (
               <label className="field">
                 שעת הגעה
-                <select value={s.arrival_time ?? ""} disabled={!editable} onChange={(e) => save(s, true, e.target.value || null)}>
+                <select value={s.arrival_time ?? ""} onChange={(e) => save(s, true, e.target.value || null)}>
                   <option value="">בזמן ({fmtTime(s.arrival_at)})</option>
                   {LATE_TIMES.map((t) => <option key={t} value={t}>{t}</option>)}
                 </select>

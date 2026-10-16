@@ -19,6 +19,30 @@ from app.registration.models import AvailabilityAttention, Invitation, Registrat
 from app.scheduling.models import Assignment
 
 
+def shift_state(shift: Shift, now: datetime) -> str:
+    """Per-shift cutoff, from the shift's own start instant (Asia/Jerusalem wall clock, stored as UTC).
+    From starts_at on, registration and late requests for that shift are closed for volunteers."""
+    if now >= shift.ends_at:
+        return "ended"
+    if now >= shift.starts_at:
+        return "started"
+    return "before"
+
+
+_SHIFT_CLOSED = {
+    "started": ("shift_started", "המשמרת כבר התחילה"),
+    "ended": ("shift_ended", "המשמרת הסתיימה"),
+}
+
+
+def _refuse_if_shift_closed(shift: Shift, now: datetime, actor: Actor) -> None:
+    """Authorization override: Admin keeps direct management of registrations (DECISIONS D-53)."""
+    state = shift_state(shift, now)
+    if state != "before" and not actor.is_admin:
+        code, text = _SHIFT_CLOSED[state]
+        raise conflict(code, text, {"state": state})
+
+
 def window_state(day: ActivityDay, now: datetime) -> str:
     if now < day.registration_opens_at:
         return "not_open"
@@ -50,6 +74,7 @@ def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) 
         shifts.append({
             "shift_id": str(s.id), "kind": s.kind, "starts_at": s.starts_at, "ends_at": s.ends_at,
             "arrival_at": s.arrival_at, "allows_late_arrival": s.allows_late_arrival,
+            "state": shift_state(s, now),
             "available": None if c is None else c.available,
             "arrival_time": c.arrival_time.strftime("%H:%M") if c and c.arrival_time else None,
             "is_late": bool(c and c.is_late),
@@ -59,6 +84,7 @@ def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) 
         "weekday": local_weekday(day.local_date),
         "window": window_state(day, now), "opens_at": day.registration_opens_at,
         "closes_at": day.registration_closes_at, "revision": reg.revision if reg else 0, "shifts": shifts,
+        "server_now": now,  # the clock the cutoffs were judged against (the UI uses it, not the phone's clock)
         # The volunteer's own written requests for this day, so the screen never offers a duplicate.
         "requests": [{"id": str(q.id), "status": q.status, "created_at": q.created_at} for q in db.scalars(
             select(RegistrationRequest).where(RegistrationRequest.user_id == actor.user_id,
@@ -82,6 +108,7 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
         shift = shifts.get(a["shift_id"])
         if shift is None:
             raise bad_request("shift_not_selectable", "אי אפשר להירשם בעצמך למשמרת זו")
+        _refuse_if_shift_closed(shift, now, actor)
         arrival = a.get("arrival_time")
         if arrival is not None and (not shift.allows_late_arrival or not a["available"]):
             raise bad_request("arrival_not_allowed", "בחירת שעת הגעה אפשרית רק במשמרת ערב ביום רגיל")
@@ -190,8 +217,8 @@ def _same_text(a: str, b: str) -> bool:
     return " ".join(a.split()) == " ".join(b.split())
 
 
-def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid.UUID, message: str,
-                   now: datetime, confirm_duplicate: bool = False) -> tuple[RegistrationRequest, bool]:
+def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid.UUID, shift_id: uuid.UUID,
+                   message: str, now: datetime, confirm_duplicate: bool = False) -> tuple[RegistrationRequest, bool]:
     """Idempotent by the client-generated request_id: a retried submit returns the stored request
     (200) instead of creating a second one or notifying the managers again (201 when created).
 
@@ -213,25 +240,33 @@ def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid
         raise conflict("registration_open", "ההרשמה עדיין פתוחה. אפשר לסמן זמינות ישירות")
     if state == "ended":
         raise conflict("day_ended", "התאריך כבר עבר")
+    shift = db.get(Shift, shift_id)
+    if shift is None or shift.activity_day_id != day.id:
+        raise not_found("shift_not_found", "המשמרת לא נמצאה")
+    # Late requests are for shifts that have not started yet. Checked at submit time, so a form that
+    # was open when the shift started is refused.
+    if shift_state(shift, now) != "before":
+        code, text_he = _SHIFT_CLOSED[shift_state(shift, now)]
+        raise conflict(code, text_he, {"state": shift_state(shift, now)})
     text = (message or "").strip()
     if len(text) < 2:
         raise bad_request("request_empty", "יש לכתוב את הבקשה")
     if not confirm_duplicate:
         pending = db.scalars(select(RegistrationRequest).where(
-            RegistrationRequest.user_id == actor.user_id, RegistrationRequest.activity_day_id == day.id,
+            RegistrationRequest.user_id == actor.user_id, RegistrationRequest.shift_id == shift.id,
             RegistrationRequest.status == "pending")).all()
         twin = next((p for p in pending if _same_text(p.message, text)), None)
         if twin is not None:
             db.rollback()
             raise conflict("duplicate_request", "כבר נשלחה בקשה זהה שעדיין לא טופלה. לשלוח שוב?",
                            {"existing_id": str(twin.id)})
-    req = RegistrationRequest(id=request_id, user_id=actor.user_id, activity_day_id=day.id, message=text,
-                              status="pending", created_at=now)
+    req = RegistrationRequest(id=request_id, user_id=actor.user_id, activity_day_id=day.id, shift_id=shift.id,
+                              message=text, status="pending", created_at=now)
     db.add(req)
     db.flush()
     managers = day_manager_ids(db, local_weekday(day.local_date))
     enqueue(db, event_type="registration_request", recipients=managers, dedup_prefix=f"reg_request:{req.id}",
-            payload={"date": day.local_date.isoformat(), "activity_day_id": str(day.id),
+            payload={"date": day.local_date.isoformat(), "activity_day_id": str(day.id), "shift": shift.kind,
                      "request_id": str(req.id), "user_id": str(actor.user_id)}, now=now)
     # The audit row records that a request was made, not its text (text is private to the volunteer and managers).
     record(db, actor_id=actor.user_id, action="registration_request", object_type="activity_day", object_id=day.id,
@@ -246,8 +281,10 @@ def day_requests(db: Session, actor: Actor, day: ActivityDay) -> list[dict]:
     rows = db.execute(select(RegistrationRequest, User.full_name).join(User, User.id == RegistrationRequest.user_id)
                       .where(RegistrationRequest.activity_day_id == day.id)
                       .order_by((RegistrationRequest.status == "resolved"), RegistrationRequest.created_at)).all()
+    kinds = {s.id: s.kind for s in db.scalars(select(Shift).where(Shift.activity_day_id == day.id))}
     return [{"id": str(r.id), "user_id": str(r.user_id), "full_name": name, "message": r.message,
-             "status": r.status, "created_at": r.created_at, "resolved_at": r.resolved_at} for r, name in rows]
+             "shift": kinds.get(r.shift_id), "status": r.status, "created_at": r.created_at,
+             "resolved_at": r.resolved_at} for r, name in rows]
 
 
 def resolve_request(db: Session, actor: Actor, request_id: uuid.UUID, now: datetime) -> None:
