@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
-from app.access.policies import can_register_for_day, manages_day, require_manage_day
+from app.access.policies import can_register_for_day, can_see_open_registration, manages_day, require_manage_day
 from app.audit.service import record
 from app.accounts.models import User
 from app.core.errors import bad_request, conflict, not_found
@@ -62,7 +62,7 @@ def selectable_shifts(db: Session, day: ActivityDay) -> list[Shift]:
 
 
 def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> dict:
-    if not can_register_for_day(db, actor, day, now):
+    if not can_see_open_registration(db, actor, day, now):
         raise not_found("day_not_found", "היום לא נמצא")
     reg = db.scalar(select(Registration).where(Registration.user_id == actor.user_id,
                                                Registration.activity_day_id == day.id))

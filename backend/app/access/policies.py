@@ -137,6 +137,16 @@ def has_open_invitation(db: Session, actor: Actor, day: ActivityDay, now: dateti
     )
 
 
+def can_see_open_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
+    """Whether a date appears in the registration list. Admin sees every date, regardless of home day, invitations,
+    assignments or volunteer level. Listing never registers anyone: answering still needs can_register_for_day."""
+    if not actor.is_active:
+        return False
+    if actor.is_admin:
+        return True
+    return can_register_for_day(db, actor, day, now)
+
+
 def can_register_for_day(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
     """Who may give availability for a date (timing is checked separately).
 

@@ -56,11 +56,14 @@ def registration_readable_days(actor: Actor) -> ColumnElement[bool]:
 
 
 def registerable_days(actor: Actor, now: datetime) -> ColumnElement[bool]:
-    """Dates the actor may answer availability for (eligibility only, not timing)."""
-    if not actor.is_active or actor.level is None:
+    """Dates shown in the registration list for the actor. Admin: every date (listing only; answering still needs
+    a volunteer level, see policies.can_register_for_day). Others: eligibility only, not timing."""
+    if not actor.is_active:
         return false()
-    if actor.is_admin:  # admin override, same rule as policies.can_register_for_day
+    if actor.is_admin:  # admin override: listing is not limited by level, home day or invitations
         return true()
+    if actor.level is None:
+        return false()
     clauses = [_weekday_col() == SATURDAY]
     if actor.home_weekday is not None:
         clauses.append(_weekday_col() == actor.home_weekday)
