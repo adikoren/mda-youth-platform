@@ -147,3 +147,12 @@ def test_endpoint_allowlist_blocks_unknown_hosts():
     assert not push.valid_endpoint("https://169.254.169.254/latest/meta-data")
     assert not push.valid_endpoint("https://localhost/x")
     assert not push.valid_endpoint("https://fcm.googleapis.com.evil.test/x")
+
+
+def test_vapid_contact_must_be_a_real_looking_domain():
+    # Apple answers 403 BadJwtToken for placeholder domains such as *.test (found on 2026-10-17).
+    assert push.valid_subject("mailto:admin@example.com")
+    assert push.valid_subject("https://mda.example.org/contact")
+    assert not push.valid_subject("mailto:admin@example.test")
+    assert not push.valid_subject("mailto:admin@localhost")
+    assert not push.valid_subject("admin@example.com")  # no mailto: scheme

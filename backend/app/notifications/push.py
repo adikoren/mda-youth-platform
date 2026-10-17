@@ -48,9 +48,24 @@ def public_key() -> str | None:
     return key or None
 
 
+_PLACEHOLDER_SUFFIXES = (".test", ".example", ".invalid", ".localhost", ".local")
+
+
+def valid_subject(subject: str) -> bool:
+    """The VAPID contact (sub) must be a mailto: address or https URL on a real domain. Apple rejects placeholder
+    domains such as *.test with 403 BadJwtToken, so those are refused here with a clear message."""
+    if subject.startswith("mailto:"):
+        domain = subject[len("mailto:"):].rsplit("@", 1)[-1].lower()
+    elif subject.startswith("https://"):
+        domain = (urlsplit(subject).hostname or "").lower()
+    else:
+        return False
+    return "." in domain and not domain.endswith(_PLACEHOLDER_SUFFIXES) and domain not in ("localhost",)
+
+
 def configured() -> bool:
     s = get_settings()
-    return bool(s.vapid_public_key.strip() and s.vapid_private_key_path)
+    return bool(s.vapid_public_key.strip() and s.vapid_private_key_path and valid_subject(s.vapid_subject))
 
 
 def send(endpoint: str, p256dh: str, auth: str, payload: dict) -> PushResult:

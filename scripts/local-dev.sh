@@ -14,7 +14,7 @@ export MDA_TEST_DATABASE_URL="postgresql+psycopg://mda@127.0.0.1:5433/mda_test"
 # Web Push (VAPID): the private key stays in the local data folder (never in Git); the public key is shown to browsers.
 export MDA_VAPID_PRIVATE_KEY_PATH="$DATA/vapid_private.pem"
 export MDA_VAPID_PUBLIC_KEY="$(cat "$DATA/vapid_public.txt" 2>/dev/null || true)"
-export MDA_VAPID_SUBJECT="${MDA_VAPID_SUBJECT:-mailto:admin@example.test}"
+export MDA_VAPID_SUBJECT="${MDA_VAPID_SUBJECT:-mailto:admin@example.com}"
 
 case "${1:-start}" in
   start)

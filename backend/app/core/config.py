@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # is exposed to the browser. Empty = Web Push not configured (the test action then says so).
     vapid_public_key: str = ""
     vapid_private_key_path: str = ""
-    vapid_subject: str = "mailto:admin@example.test"  # replace with a real contact address before any real use
+    vapid_subject: str = "mailto:admin@example.com"  # contact for the push services; must be a real-looking domain (not *.test)
     push_test_interval_seconds: int = 30
 
     @field_validator("database_url", "test_database_url")
