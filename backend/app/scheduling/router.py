@@ -177,15 +177,38 @@ class PublishIn(BaseModel):
     expected_edit_count: int
 
 
+UPCOMING_DAYS = 7    # main list: today through the next seven days (Asia/Jerusalem)
+HISTORY_DAYS = 60    # history: completed dates within the schedule retention window
+
+
 @manage.get("/days")
-def managed_days(start: date | None = None, end: date | None = None, actor: Actor = Depends(get_active_actor),
-                 db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
-    start, end = _range(start, end, now)
-    days = list(db.scalars(select(ActivityDay).where(queries.managed_days(actor),
-                                                     ActivityDay.local_date.between(start, end))
-                           .order_by(ActivityDay.local_date)))
+def managed_days(actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
+                 now: datetime = Depends(now_dep)):
+    """The manager's dates in two sections (decision 2026-10-17). "main": today through the next seven days that
+    are not completed; "history": dates whose every shift has ended, most recent first. A date leaves "main" by
+    its clock (its last shift ends), not by any manual step. Nothing is modified."""
+    today = local_today(now)
+    days = list(db.scalars(select(ActivityDay).where(
+        queries.managed_days(actor),
+        ActivityDay.local_date.between(today - timedelta(days=HISTORY_DAYS), today + timedelta(days=UPCOMING_DAYS)))
+        .order_by(ActivityDay.local_date)))
+    last_end = dict(db.execute(select(Shift.activity_day_id, func.max(Shift.ends_at))
+                               .where(Shift.activity_day_id.in_([d.id for d in days]))
+                               .group_by(Shift.activity_day_id)).all()) if days else {}
     flags = views.manager_day_flags(db, days)
-    return [views.day_summary(d, now) | flags[d.id] for d in days]
+    out = []
+    for d in days:
+        completed = last_end.get(d.id) is not None and last_end[d.id] <= now
+        if completed:
+            section = "history"
+        elif today <= d.local_date <= today + timedelta(days=UPCOMING_DAYS):
+            section = "main"
+        else:
+            continue  # beyond the next seven days: not shown in the main list
+        out.append(views.day_summary(d, now) | flags[d.id] | {"section": section})
+    main = sorted((x for x in out if x["section"] == "main"), key=lambda x: x["date"])
+    history = sorted((x for x in out if x["section"] == "history"), key=lambda x: x["date"], reverse=True)
+    return main + history
 
 
 @manage.post("/days/{day_id}/draft")

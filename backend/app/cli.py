@@ -118,7 +118,8 @@ def cmd_seed_demo(args) -> None:
             db.add(User(email="pending@example.test", full_name="משתמש ממתין", password_hash=pw_hash,
                         status="pending", requested_weekday=4, created_at=now))
         today = local_today(now)
-        days.generate_days(db, today - timedelta(days=3), today + timedelta(days=args.days), now)
+        # Demo data shows full days (every shift type the day kind allows); real dates default to evening only.
+        days.generate_days(db, today - timedelta(days=3), today + timedelta(days=args.days), now, shift_kinds=None)
         db.commit()
     print("demo personas ready (synthetic data only)")
     print("emails: admin@example.test, youth.manager@example.test, <day>.manager|mentor|youth|trainee1..3@example.test")

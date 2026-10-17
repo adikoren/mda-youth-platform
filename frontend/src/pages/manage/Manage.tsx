@@ -8,26 +8,37 @@ import { LevelBadge, Loading, Shell, TimeRange, errorText, useLoad } from "../..
 interface BoardingRow { position: number; shift: ShiftKind; shift_id: string; user_id: string; full_name: string;
   level: Level | null; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }
 
+// Dates to manage: the main list is today through the next seven days (Asia/Jerusalem); completed dates are
+// in history. The server decides the section; this page only shows it.
 export function ManageDays() {
-  const days = useLoad(() => api.get<DaySummary[]>("/api/manage/days"));
+  const days = useLoad(() => api.get<(DaySummary & { section: "main" | "history" })[]>("/api/manage/days"));
+  const main = (days.data ?? []).filter((d) => d.section === "main");
+  const history = (days.data ?? []).filter((d) => d.section === "history");
+  const row = (d: DaySummary) => (
+    <Link key={d.id} to={`/manage/${d.id}`} className="card stack" style={{ textDecoration: "none", color: "inherit" }}>
+      <div className="row spread">
+        <strong>{dayTitle(d)}</strong>
+        <span className="row">
+          {d.is_published ? <span className="badge youth">פורסם</span> : <span className="badge">טרם פורסם</span>}
+          {d.draft_dirty && <span className="badge late">שינויים לא פורסמו</span>}
+          {!!d.attention_count && <span className="badge red">נדרש טיפול: {d.attention_count}</span>}
+        </span>
+      </div>
+      <div className="muted">{DAY_KIND[d.kind]} · {WINDOW[d.window]} · יעד פרסום {fmtDateTime(d.publish_target_at)}</div>
+    </Link>
+  );
   return (
     <Shell title="ניהול סידורים">
       <Link className="btn" to="/manage/trainees">חניכים — יומנים והתקדמות</Link>
       {!days.data && <Loading error={days.error} />}
-      {days.data?.length === 0 && <div className="card muted">אין ימים בניהולך בטווח הקרוב.</div>}
-      {days.data?.map((d) => (
-        <Link key={d.id} to={`/manage/${d.id}`} className="card stack" style={{ textDecoration: "none", color: "inherit" }}>
-          <div className="row spread">
-            <strong>{dayTitle(d)}</strong>
-            <span className="row">
-              {d.is_published ? <span className="badge youth">פורסם</span> : <span className="badge">טרם פורסם</span>}
-              {d.draft_dirty && <span className="badge late">שינויים לא פורסמו</span>}
-              {!!d.attention_count && <span className="badge red">נדרש טיפול: {d.attention_count}</span>}
-            </span>
-          </div>
-          <div className="muted">{DAY_KIND[d.kind]} · {WINDOW[d.window]} · יעד פרסום {fmtDateTime(d.publish_target_at)}</div>
-        </Link>
-      ))}
+      {days.data && main.length === 0 && <div className="card muted">אין ימים בניהולך בשבעת הימים הקרובים.</div>}
+      {main.map(row)}
+      {history.length > 0 && (
+        <section className="section">
+          <h3 className="section-title">היסטוריה</h3>
+          {history.map(row)}
+        </section>
+      )}
     </Shell>
   );
 }
