@@ -4,6 +4,8 @@ import { api, isUnreachable, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
 import { SHIFT, dayTitle, fmtDateTime } from "../he";
 import { GROUPS, fromFields, threeWayMerge, toFields, type Values } from "../merge";
+import { currentPushState, disablePush, enablePush, sendSelfTest } from "../push";
+import type { PushState } from "../pushUtil";
 import {
   drafts, edits as editStore, keys, newRideId, rememberJournal, resolveDraft, retryDraft, snapshots, syncDrafts,
   type Draft, type Edit, type Snapshot,
@@ -814,34 +816,72 @@ export function NotificationNotice() {
   );
 }
 
+// Notification settings for this device (Web Push). The current state is always shown in words.
+const STATE_TEXT: Record<PushState, string> = {
+  enabled: "מופעלות במכשיר הזה",
+  not_enabled: "לא מופעלות במכשיר הזה",
+  denied: "חסומות בהגדרות (הרשאה נדחתה)",
+  needs_home_screen: "לא זמינות עדיין בדפדפן הזה",
+  unsupported: "הדפדפן הזה אינו תומך בהתראות",
+};
+
 export function NotificationsHelp() {
-  const [perm, setPerm] = useState(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+  const [state, setState] = useState<PushState | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(() => { currentPushState().then(setState, () => setState("unsupported")); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+
+  async function run(fn: () => Promise<string | void>) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const text = await fn();
+      if (text) setMessage(text);
+    } catch (e) {
+      setMessage(errorText(e));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  }
+
   return (
     <Shell title="הפעלת התראות" back="/">
-      <div className="card stack">
-        <strong>אייפון</strong>
-        <ol style={{ margin: 0, paddingInlineStart: 20 }}>
-          <li>פותחים את האתר ב־Safari.</li>
-          <li>לוחצים על כפתור השיתוף ובוחרים ״הוספה למסך הבית״ (נדרש iOS 16.4 ומעלה).</li>
-          <li>פותחים את האפליקציה מהמסך הראשי ומאשרים התראות.</li>
-        </ol>
-      </div>
-      <div className="card stack">
-        <strong>אנדרואיד</strong>
-        <ol style={{ margin: 0, paddingInlineStart: 20 }}>
-          <li>פותחים את האתר ב־Chrome.</li>
-          <li>מאשרים ״התראות״ כשהדפדפן שואל (או בהגדרות האתר).</li>
-          <li>מומלץ: תפריט ⋮ ← ״הוספה למסך הבית״.</li>
-        </ol>
-      </div>
-      <div className="card stack">
-        <span>הרשאת הדפדפן כרגע: {perm === "granted" ? "מאושרת" : perm === "denied" ? "חסומה (יש לשנות בהגדרות)" : perm === "unsupported" ? "לא נתמכת בדפדפן זה" : "טרם נבחרה"}</span>
-        {perm === "default" && (
-          <button className="btn" onClick={async () => setPerm(await Notification.requestPermission())}>אישור התראות בדפדפן</button>
+      <section className="card stack" aria-labelledby="push-title">
+        <strong id="push-title">התראות במכשיר הזה</strong>
+        <span role="status">מצב: {state ? STATE_TEXT[state] : "בודק…"}</span>
+
+        {state === "needs_home_screen" && (
+          <div className="notice">
+            באייפון ובאייפד ההתראות פועלות רק כשהאתר נפתח מהמסך הראשי: לחצו על כפתור השיתוף ובחרו ״הוספה למסך הבית״, ואז פתחו את האפליקציה מהאייקון שנוצר ואשרו התראות. נדרש iOS 16.4 ומעלה.
+          </div>
         )}
-        <div className="notice">
-          שליחת התראות לטלפון עדיין לא הופעלה במערכת. עד אז כל ההודעות מופיעות במסך הבית באפליקציה. ההרשמה למשמרות זמינה גם בלי התראות.
-        </div>
+        {state === "unsupported" && (
+          <div className="notice">הדפדפן הזה לא תומך בהתראות. אפשר לנסות Chrome באנדרואיד או Safari באייפון (מהמסך הראשי).</div>
+        )}
+        {state === "denied" && (
+          <div className="notice">
+            ההתראות חסומות. כדי לאפשר: באנדרואיד/Chrome — נעילת האתר בשורת הכתובת ← הרשאות ← התראות ← אפשרו. באייפון — הגדרות ← התראות ← מד״א. אחר כך חזרו לכאן ולחצו ״הפעלת התראות״.
+          </div>
+        )}
+
+        {state === "not_enabled" && (
+          <button className="btn primary" disabled={busy} onClick={() => run(enablePush)}>הפעלת התראות</button>
+        )}
+        {state === "enabled" && (
+          <>
+            <button className="btn" disabled={busy} onClick={() => run(sendSelfTest)}>שליחת התראת בדיקה</button>
+            <button className="btn ghost" disabled={busy} onClick={() => run(async () => { await disablePush(); return "ההתראות כובו במכשיר הזה."; })}>כיבוי התראות במכשיר הזה</button>
+          </>
+        )}
+        {message && <div className="notice" role="status">{message}</div>}
+      </section>
+
+      <div className="card stack">
+        <strong>איך זה עובד</strong>
+        <span className="muted">ההתראה נשלחת למכשיר הזה בלבד, ורק לחשבון שמחובר. ״שליחת התראת בדיקה״ בודקת את החיבור; אישור שהשירות קיבל את הבקשה אינו אישור שההתראה הופיעה במכשיר.</span>
+        <span className="muted">בהתראות לטלפון אין פרטים אישיים או פרטי משמרת. ההודעות במסך הבית באפליקציה לא משתנות.</span>
       </div>
     </Shell>
   );

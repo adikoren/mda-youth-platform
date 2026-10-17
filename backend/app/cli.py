@@ -141,6 +141,26 @@ def cmd_report_capacity(_args) -> None:
               f"version {r['revision']} ({r['version_status']})")
 
 
+def cmd_generate_vapid(args) -> None:
+    """Creates the Web Push (VAPID) key pair once. The private key is written to the given path with owner-only
+    permissions and never overwritten; the public key is printed for MDA_VAPID_PUBLIC_KEY."""
+    import base64
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    path = os.path.expanduser(args.private_key)
+    if os.path.exists(path):
+        sys.exit(f"a private key already exists at {path}; it is never overwritten")
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption())
+    point = key.public_key().public_bytes(serialization.Encoding.X962,
+                                          serialization.PublicFormat.UncompressedPoint)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(pem)
+    print(base64.urlsafe_b64encode(point).decode().rstrip("="))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -153,6 +173,9 @@ def main() -> None:
     g.add_argument("--start", required=True)
     g.add_argument("--end", required=True)
     g.set_defaults(fn=cmd_generate_days)
+    v = sub.add_parser("generate-vapid", help="create the Web Push key pair once (prints the public key)")
+    v.add_argument("--private-key", required=True)
+    v.set_defaults(fn=cmd_generate_vapid)
     s = sub.add_parser("seed-demo")
     s.add_argument("--days", type=int, default=21)
     s.set_defaults(fn=cmd_seed_demo)

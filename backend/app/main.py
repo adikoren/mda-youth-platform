@@ -8,6 +8,7 @@ from app.admin.router import admin as admin_router
 from app.admin.router import router as people_router
 from app.core.errors import AppError, app_error_handler
 from app.mentoring.router import router as journal_router
+from app.notifications.push_router import router as push_router
 from app.registration.router import router as registration_router
 from app.scheduling.router import manage as manage_router
 from app.scheduling.router import router as schedule_router
@@ -22,7 +23,8 @@ def create_app() -> FastAPI:
                                                       "detail": exc.errors()[:5]})
 
     app.add_exception_handler(RequestValidationError, validation_handler)
-    for r in (auth_router, registration_router, schedule_router, manage_router, people_router, admin_router, journal_router):
+    for r in (auth_router, registration_router, schedule_router, manage_router, people_router, admin_router, journal_router,
+              push_router):
         app.include_router(r)
 
     @app.get("/api/health")

@@ -60,7 +60,8 @@ function App() {
 
 // Offline reopening: a small service worker keeps the app shell (never API data) on the device.
 // Production builds only; the Vite dev server serves source modules that should not be cached.
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
+// Registered in every mode: Web Push needs the worker, including on localhost during development.
+if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => undefined));
 }
 

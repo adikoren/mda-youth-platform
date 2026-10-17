@@ -36,3 +36,18 @@ class OutboxMessage(Base):
     created_at: Mapped[datetime] = tstz()
     processed_at: Mapped[datetime | None] = tstz(nullable=True)
     read_at: Mapped[datetime | None] = tstz(nullable=True)
+
+
+class PushSubscription(Base):
+    """One browser/device registered for Web Push, belonging to one account. The endpoint is unique: a device
+    belongs to one account at a time (switching accounts re-assigns it). Never returned to clients."""
+
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(1024), unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = tstz()
+    last_seen_at: Mapped[datetime] = tstz()

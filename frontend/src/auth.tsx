@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, isUnreachable, type Me } from "./api";
 import { snapshots } from "./offline";
+import { detachPushForSignOut, syncPushForAccount } from "./push";
 
 interface AuthState {
   me: Me | null;
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const fresh = await api.get<Me>("/api/auth/me");
       setMe(fresh);
       rememberMe(fresh);
+      void syncPushForAccount();  // a device subscription of another account stops here
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setMe(null);
@@ -60,6 +62,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // This device stops receiving this account's push notifications first (never blocks sign-out).
+    await detachPushForSignOut();
     // Needs the server: an offline "logout" could not revoke the session cookie.
     await api.post("/api/auth/logout");
     if (me) await snapshots.clear(me.id).catch(() => undefined); // drafts (unsent work) are kept
