@@ -67,15 +67,31 @@ def enqueue(
     return len(db.execute(stmt).all())
 
 
-def day_manager_ids(db: Session, weekday: int) -> list[uuid.UUID]:
-    """Managers to notify for a weekday; falls back to admins when nobody manages that day."""
-    ids = list(
+def day_manager_ids(db: Session, weekday: int, now: datetime | None = None) -> list[uuid.UUID]:
+    """Managers to notify for a weekday: the permanent Day Manager plus any temporary manager whose appointment is
+    valid at that moment (deduplicated). Falls back to admins when nobody manages that day."""
+    from app.access.clock import get_clock
+    from app.accounts.models import TemporaryDayManagerAppointment
+    moment = now or get_clock().now()
+    permanent = list(
         db.scalars(
             select(ManagerDayScope.user_id)
             .join(User, User.id == ManagerDayScope.user_id)
             .where(ManagerDayScope.weekday == weekday, ManagerDayScope.valid_to.is_(None), User.status == "active")
         )
     )
+    temporary = list(
+        db.scalars(
+            select(TemporaryDayManagerAppointment.user_id)
+            .join(User, User.id == TemporaryDayManagerAppointment.user_id)
+            .where(TemporaryDayManagerAppointment.weekday == weekday,
+                   TemporaryDayManagerAppointment.revoked_at.is_(None),
+                   TemporaryDayManagerAppointment.starts_at <= moment,
+                   TemporaryDayManagerAppointment.ends_at > moment,
+                   User.status == "active")
+        )
+    )
+    ids = list(dict.fromkeys(permanent + temporary))  # deduplicated, order kept
     if ids:
         return ids
     return list(

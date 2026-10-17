@@ -50,13 +50,19 @@ export function BrandLogo() {
 export function goBack(navigate: NavigateFunction, fallback: string) {
   const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
   if (idx > 0) navigate(-1);
-  else navigate(fallback);
+  else navigate(internalRoute(fallback));
 }
 
-export function BackButton({ fallback }: { fallback: string }) {
+// Return destinations are application routes only: "/x" with no protocol or host.
+export function internalRoute(path: string): string {
+  return /^\/(?!\/)[^\s\\]*$/.test(path) ? path : "/";
+}
+
+export function BackButton({ fallback, direct = false }: { fallback: string; direct?: boolean }) {
   const navigate = useNavigate();
+  // direct: always go to the fallback route, never by history (used where history would step through filter states)
   return (
-    <button type="button" className="back-btn" onClick={() => goBack(navigate, fallback)}>
+    <button type="button" className="back-btn" onClick={() => (direct ? navigate(internalRoute(fallback)) : goBack(navigate, fallback))}>
       <span aria-hidden>→</span> חזרה
     </button>
   );
@@ -80,7 +86,7 @@ export function WhatsAppLink({ phone, name }: { phone: string; name: string }) {
   );
 }
 
-export function Shell({ title, back, brand = false, children }: { title: string; back?: string; brand?: boolean; children: ReactNode }) {
+export function Shell({ title, back, backDirect = false, brand = false, children }: { title: string; back?: string; backDirect?: boolean; brand?: boolean; children: ReactNode }) {
   const { me, logout } = useAuth();
   const out = () => logout().then(() => (location.href = "/login"), (e) => alert(errorText(e)));
   return (
@@ -96,7 +102,7 @@ export function Shell({ title, back, brand = false, children }: { title: string;
         </header>
       ) : (
         <header className="topbar">
-          {back && <BackButton fallback={back} />}
+          {back && <BackButton fallback={back} direct={backDirect} />}
           <h1>{title}</h1>
           {me && <button onClick={out}>יציאה</button>}
         </header>
@@ -118,8 +124,7 @@ function BottomNav() {
   ];
   if (me?.level === "trainee") items.push(["/journal", "יומן", "✚"]);
   if (me?.level === "mentor") items.push(["/mentor", "חניכה", "✚"]);
-  if (isManager(me)) items.push(["/manage", "ניהול", "✎"]);
-  if (me?.is_youth_manager || me?.is_admin) items.push(["/youth", "אחראי נוער", "★"]);
+  if (isManager(me) || me?.is_youth_manager) items.push(["/manage", "ניהול", "✎"]);
   if (me?.is_admin) items.push(["/admin", "אדמין", "⚙"]);
   return (
     <div className="bottomnav">

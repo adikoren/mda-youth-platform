@@ -625,18 +625,24 @@ def notes_for_reader(db: Session, actor: Actor, trainee_id: uuid.UUID, now: date
     raise not_found()
 
 
-def manager_trainees(db: Session, actor: Actor, now: datetime) -> list[dict]:
+def manager_trainees(db: Session, actor: Actor, now: datetime, weekday: int | None = None) -> list[dict]:
     """Home-day trainees of the actor's managed weekdays (journal access) or, for admin/youth
-    manager, all trainees (progress; journal only for admin)."""
+    manager, all trainees (progress; journal only for admin). weekday limits the list to one home day.
+    Saturday managers have no trainee-management access (decision of 2026-10-17)."""
     q = (select(User.id, User.full_name, DayMembership.weekday)
          .join(VolunteerLevel, (VolunteerLevel.user_id == User.id) & VolunteerLevel.valid_to.is_(None)
                & (VolunteerLevel.level == "trainee"))
          .outerjoin(DayMembership, (DayMembership.user_id == User.id) & DayMembership.valid_to.is_(None))
          .where(User.status == "active").order_by(User.full_name))
     if not (actor.is_admin or actor.is_youth_manager):
-        if not actor.managed_weekdays:
+        ordinary = sorted(w for w in actor.managed_weekdays if w != 6)
+        if not ordinary:
             raise forbidden()
-        q = q.where(DayMembership.weekday.in_(sorted(actor.managed_weekdays)))
+        if weekday is not None and weekday not in ordinary:
+            raise not_found()
+        q = q.where(DayMembership.weekday.in_(ordinary))
+    if weekday is not None:
+        q = q.where(DayMembership.weekday == weekday)
     rows = db.execute(q).all()
     prog = progress_for(db, [r[0] for r in rows])
     return [{"id": str(uid), "full_name": name, "home_weekday": wd, **prog[uid],

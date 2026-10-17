@@ -1,15 +1,28 @@
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AuthProvider, isManager, useAuth } from "./auth";
 import { Login, Pending, Signup } from "./pages/Auth";
 import { History, Home, RegisterDay, ScheduleView } from "./pages/Volunteer";
 import { ScheduleDaysPage } from "./pages/ScheduleDays";
-import { BoardPage, ManageHub } from "./pages/manage/Manage";
+import { BoardPage, ManageHub, TraineeDay, TraineesEntry } from "./pages/manage/Manage";
 import { ProfilePage } from "./pages/Profile";
-import { JournalPage, ManagerTrainees, MentorHome, NotesPage, NotificationsHelp, OfflineHome } from "./pages/Journal";
+import { JournalPage, MentorHome, NotesPage, NotificationsHelp, OfflineHome } from "./pages/Journal";
 import { AdminAudit, AdminCalendar, AdminOutbox, AdminUsers, YouthManager } from "./pages/admin/Admin";
-import { YouthDayPage, YouthHub, YouthVolunteersPage } from "./pages/Youth";
+
+// Old youth-manager addresses now live under the unified management area; day-specific links keep their day.
+function RedirectDay({ to }: { to: (weekday: string) => string }) {
+  const { weekday = "" } = useParams();
+  return <Navigate to={to(weekday)} replace />;
+}
+
+function TraineeDayRoute() {
+  const { weekday = "" } = useParams();
+  const wd = Number(weekday);
+  if (!Number.isInteger(wd) || wd < 0 || wd > 6) return <Navigate to="/manage/trainees" replace />;
+  return <TraineeDay weekday={wd} />;
+}
+import { YouthDayPage, YouthVolunteersPage } from "./pages/Youth";
 import "./styles.css";
 
 // Route guards only shape navigation; every rule is enforced again by the API.
@@ -47,13 +60,17 @@ function App() {
       <Route path="/notes" element={<Guard><NotesPage /></Guard>} />
       <Route path="/notifications" element={<Guard><NotificationsHelp /></Guard>} />
       <Route path="/people/:userId" element={<Guard><ProfilePage /></Guard>} />
-      <Route path="/manage/trainees" element={<Guard need="staff"><ManagerTrainees /></Guard>} />
-      <Route path="/manage" element={<Guard need="manager"><ManageHub /></Guard>} />
+      <Route path="/manage" element={<Guard need="staff"><ManageHub /></Guard>} />
+      <Route path="/manage/day/:weekday" element={<Guard need="youth"><YouthDayPage /></Guard>} />
+      <Route path="/manage/day/:weekday/volunteers" element={<Guard need="youth"><YouthVolunteersPage /></Guard>} />
+      <Route path="/manage/appointments" element={<Guard need="youth"><YouthManager /></Guard>} />
+      <Route path="/manage/trainees" element={<Guard need="staff"><TraineesEntry /></Guard>} />
+      <Route path="/manage/trainees/day/:weekday" element={<Guard need="staff"><TraineeDayRoute /></Guard>} />
       <Route path="/manage/:dayId" element={<Guard need="manager"><BoardPage /></Guard>} />
-      <Route path="/youth" element={<Guard need="youth"><YouthHub /></Guard>} />
-      <Route path="/youth/managers" element={<Guard need="youth"><YouthManager /></Guard>} />
-      <Route path="/youth/day/:weekday" element={<Guard need="youth"><YouthDayPage /></Guard>} />
-      <Route path="/youth/day/:weekday/volunteers" element={<Guard need="youth"><YouthVolunteersPage /></Guard>} />
+      <Route path="/youth" element={<Navigate to="/manage" replace />} />
+      <Route path="/youth/managers" element={<Navigate to="/manage/appointments" replace />} />
+      <Route path="/youth/day/:weekday" element={<RedirectDay to={(w) => `/manage/day/${w}`} />} />
+      <Route path="/youth/day/:weekday/volunteers" element={<RedirectDay to={(w) => `/manage/day/${w}/volunteers`} />} />
       <Route path="/admin" element={<Guard need="admin"><AdminUsers /></Guard>} />
       <Route path="/admin/calendar" element={<Guard need="admin"><AdminCalendar /></Guard>} />
       <Route path="/admin/outbox" element={<Guard need="admin"><AdminOutbox /></Guard>} />

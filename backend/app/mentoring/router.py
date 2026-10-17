@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -108,9 +108,9 @@ def mentor_home(actor: Actor = Depends(get_active_actor), db: Session = Depends(
 
 
 @router.get("/journal/trainees")
-def trainees(actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
-             now: datetime = Depends(now_dep)):
-    return service.manager_trainees(db, actor, now)
+def trainees(weekday: int | None = Query(None, ge=0, le=6), actor: Actor = Depends(get_active_actor),
+             db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    return service.manager_trainees(db, actor, now, weekday)
 
 
 @router.get("/journal/trainees/{trainee_id}")

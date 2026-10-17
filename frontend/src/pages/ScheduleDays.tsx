@@ -15,13 +15,30 @@ export interface ScheduleRow extends DaySummary {
   attention_count?: number;
 }
 
-function DayRow({ d, manager }: { d: ScheduleRow; manager: boolean }) {
-  const [open, setOpen] = useState(false);
+// Expanded rows are remembered for this browser session, so going back restores them (never sensitive data).
+const OPEN_KEY = "mda-schedule-open-rows";
+function readOpen(): Set<string> {
+  try {
+    const raw = window.sessionStorage.getItem(OPEN_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+function writeOpen(rows: Set<string>) {
+  try {
+    window.sessionStorage.setItem(OPEN_KEY, JSON.stringify([...rows]));
+  } catch {
+    /* storage unavailable: the rows simply start collapsed */
+  }
+}
+
+function DayRow({ d, manager, open, onToggle }: { d: ScheduleRow; manager: boolean; open: boolean; onToggle: () => void }) {
   const panelId = `day-panel-${d.id}`;
   return (
     <div className={`day-row${open ? " open" : ""}`}>
       <button type="button" className="day-row-head" aria-expanded={open} aria-controls={panelId}
-              onClick={() => setOpen(!open)}>
+              onClick={onToggle}>
         <strong className="day-row-title">{dayTitle(d)}</strong>
         <span className="day-row-status">
           <span className={`badge${d.is_published ? " pub" : ""}`}>{d.is_published ? "פורסם" : "טרם פורסם"}</span>
@@ -52,6 +69,7 @@ function DayRow({ d, manager }: { d: ScheduleRow; manager: boolean }) {
 export function ScheduleDaysPage() {
   const { me } = useAuth();
   const manager = isManager(me);
+  const youthView = !!(me?.is_admin || me?.is_youth_manager);
   // ?weekday=N scopes the list to one weekday (entered from a management hub or a youth manager's day page).
   const [params] = useSearchParams();
   const weekdayParam = params.get("weekday");
@@ -63,30 +81,41 @@ export function ScheduleDaysPage() {
     const r = await api.get<{ items: (DaySummary & { historical: boolean })[] }>("/api/schedule");
     return r.items.map((d) => ({ ...d, section: d.historical ? "history" : "main", is_published: true }));
   }, [manager]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [openRows, setOpenRows] = useState<Set<string>>(readOpen);
+  const toggle = (id: string) => {
+    const next = new Set(openRows);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setOpenRows(next);
+    writeOpen(next);
+  };
+  const historyOpen = openRows.has("history");
   const inScope = (d: ScheduleRow) => weekday === null || d.weekday === weekday;
   const main = (days.data ?? []).filter((d) => d.section === "main" && inScope(d)).sort((a, b) => a.date.localeCompare(b.date));
   const history = (days.data ?? []).filter((d) => d.section === "history" && inScope(d)).sort((a, b) => b.date.localeCompare(a.date));
   return (
     <Shell title={weekday === null ? "סידור" : `${weekday === 6 ? "שבת" : `יום ${WEEKDAYS[weekday]}`} · ניהול משמרת`}
-           back={weekday === null ? undefined : (manager ? "/manage" : `/youth/day/${weekday}`)}>
+           back={weekday === null ? undefined : (youthView ? `/manage/day/${weekday}` : "/manage")}>
       {!days.data && <Loading error={days.error} />}
       {days.data && main.length === 0 && history.length === 0 && (
         <div className="card muted">
           {manager ? "אין ימים בניהולך בשבעת הימים הקרובים." : "אין סידורים מפורסמים שזמינים לך כרגע."}
         </div>
       )}
-      {main.length > 0 && <div className="day-list">{main.map((d) => <DayRow key={d.id} d={d} manager={manager} />)}</div>}
+      {main.length > 0 && (
+        <div className="day-list">
+          {main.map((d) => <DayRow key={d.id} d={d} manager={manager} open={openRows.has(d.id)} onToggle={() => toggle(d.id)} />)}
+        </div>
+      )}
       {history.length > 0 && (
         <section className="section">
           <button type="button" className="day-row-head history-toggle" aria-expanded={historyOpen}
-                  aria-controls="history-panel" onClick={() => setHistoryOpen(!historyOpen)}>
+                  aria-controls="history-panel" onClick={() => toggle("history")}>
             <strong className="day-row-title">היסטוריית סידורים ({history.length})</strong>
             <span className="day-row-chev" aria-hidden>{historyOpen ? "▴" : "▾"}</span>
           </button>
           {historyOpen && (
             <div className="day-list" id="history-panel">
-              {history.map((d) => <DayRow key={d.id} d={d} manager={manager} />)}
+              {history.map((d) => <DayRow key={d.id} d={d} manager={manager} open={openRows.has(d.id)} onToggle={() => toggle(d.id)} />)}
             </div>
           )}
         </section>

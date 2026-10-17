@@ -111,12 +111,18 @@ def set_day_managers(db: Session, weekday: int, user_ids: list[uuid.UUID], by: u
     if not 0 <= weekday <= 6:
         raise bad_request("bad_weekday", "יום לא חוקי")
     wanted = set(user_ids)
+    if len(wanted) > 1:
+        raise conflict("one_day_manager_per_weekday", "לכל יום יש אחראי יום קבוע אחד בלבד")
     for uid in wanted:
         user = get_user(db, uid)
         if user.status != "active":
             raise conflict("user_not_active", f"{user.full_name}: החשבון אינו פעיל")
         if current_level(db, uid) != "mentor":
             raise conflict("day_manager_must_be_mentor", f"{user.full_name}: אחראי יום חייב להיות חונך")
+        other = db.scalar(select(ManagerDayScope.weekday).where(
+            ManagerDayScope.user_id == uid, ManagerDayScope.valid_to.is_(None), ManagerDayScope.weekday != weekday))
+        if other is not None:
+            raise conflict("already_permanent_manager", f"{user.full_name}: כבר אחראי יום קבוע ביום אחר")
     current = set(day_managers_for(db, weekday))
     for uid in current - wanted:
         db.execute(update(ManagerDayScope).where(ManagerDayScope.user_id == uid, ManagerDayScope.weekday == weekday,

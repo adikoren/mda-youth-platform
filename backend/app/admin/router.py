@@ -126,8 +126,20 @@ def youth_day_volunteers(weekday: int, actor: Actor = Depends(get_active_actor),
     volunteers = sorted(({"user_id": str(uid), "full_name": info[uid].full_name, "level": info[uid].level}
                          for uid in member_ids if uid not in manager_ids and uid in info),
                         key=lambda v: v["full_name"])
+    # Temporary managers valid right now (identified separately; the permanent manager stays first).
+    from app.accounts.models import TemporaryDayManagerAppointment
+    from app.accounts.temporary import status_of
+    from app.access.clock import get_clock
+    moment = get_clock().now()
+    temp_rows = list(db.scalars(select(TemporaryDayManagerAppointment).where(
+        TemporaryDayManagerAppointment.weekday == weekday, TemporaryDayManagerAppointment.revoked_at.is_(None),
+        TemporaryDayManagerAppointment.starts_at <= moment, TemporaryDayManagerAppointment.ends_at > moment)))
+    temp_info = people(db, {r.user_id for r in temp_rows}) if temp_rows else {}
+    temporary = [{"user_id": str(r.user_id), "full_name": temp_info[r.user_id].full_name,
+                  "level": temp_info[r.user_id].level, "ends": r.ends_at.isoformat()}
+                 for r in temp_rows if r.user_id in temp_info]
     return {"weekday": weekday, "weekday_name": WEEKDAY_NAMES_HE[weekday], "day_managers": managers,
-            "volunteers": volunteers}
+            "temporary_managers": temporary, "volunteers": volunteers}
 
 
 @router.put("/day-managers/{weekday}")

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, isUnreachable, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
-import { SHIFT, dayTitle, fmtDateTime } from "../he";
+import { SHIFT, WEEKDAYS, dayTitle, fmtDateTime } from "../he";
 import { GROUPS, fromFields, threeWayMerge, toFields, type Values } from "../merge";
 import { currentPushState, disablePush, enablePush, sendSelfTest } from "../push";
 import type { PushState } from "../pushUtil";
@@ -743,11 +743,17 @@ export function OfflineHome() {
 }
 
 // ---- manager trainees ----
-export function ManagerTrainees() {
-  const list = useLoad(() => api.get<{ id: string; full_name: string; ride_count: number; last_ride_date: string | null; journal_access: boolean }[]>("/api/journal/trainees"));
+// Trainee progress list, optionally limited to one home day (decision of 2026-10-17). Shared by the management
+// screens; the detailed progress content is unchanged.
+export function TraineeList({ weekday, back }: { weekday: number | null; back: string }) {
+  const path = weekday === null ? "/api/journal/trainees" : `/api/journal/trainees?weekday=${weekday}`;
+  const list = useLoad(() => api.get<{ id: string; full_name: string; ride_count: number; last_ride_date: string | null; journal_access: boolean }[]>(path), [path]);
+  const title = weekday === null ? "חניכים" : `${weekday === 6 ? "שבת" : `יום ${WEEKDAYS[weekday]}`} · חניכים`;
   return (
-    <Shell title="חניכים" back="/manage">
+    <Shell title={title} back={back}>
+      <h2>{title}</h2>
       {!list.data && <Loading error={list.error} />}
+      {list.data?.length === 0 && <div className="card muted">אין חניכים ליום הזה.</div>}
       {list.data?.map((t) => {
         const body = (
           <>

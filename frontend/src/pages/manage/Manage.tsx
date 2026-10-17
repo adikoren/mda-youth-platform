@@ -1,49 +1,56 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api, type DaySummary, type Level, type ShiftKind } from "../../api";
+import { Link, Navigate, useParams } from "react-router-dom";
+import { api, ApiError, type DaySummary, type Level, type ShiftKind } from "../../api";
 import { useAuth } from "../../auth";
-import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime } from "../../he";
+import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDateTime, fmtTime } from "../../he";
 import { LevelBadge, Loading, Shell, TimeRange, errorText } from "../../ui";
+import { TraineeList } from "../Journal";
 
 // Ordered boarding list entry (סדר עלייה). Being on the list is scheduled participation.
 interface BoardingRow { position: number; shift: ShiftKind; shift_id: string; user_id: string; full_name: string;
   level: Level | null; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }
 
-// Management hub, by role (decision of 2026-10-17). Hiding is not authorization: every destination enforces its own
-// rules on the server. Day Managers see exactly their two buttons; a Saturday-only manager sees Saturday alone;
-// Admin keeps full access. Future modules are visible but disabled, and open nothing.
+// A 404 on a management screen means the day is no longer managed by this person (expired or revoked, or never
+// granted). Explain it in Hebrew instead of showing a generic error. No change was applied.
+export function accessMessage(e: unknown): string {
+  if (e instanceof ApiError && e.status === 404) {
+    return "ההרשאה לניהול היום הזה הסתיימה או בוטלה. לא בוצע שינוי. יש לחזור לתפריט הניהול.";
+  }
+  return errorText(e);
+}
+
+const DAY_NAME = (wd: number) => (wd === 6 ? "שבת" : `יום ${WEEKDAYS[wd]}`);
+
+// Unified management hub (decision of 2026-10-17). What is shown follows the signed-in user's existing permissions;
+// nothing here grants access by itself. Every destination enforces its own rules on the server.
 export function ManageHub() {
   const { me } = useAuth();
-  const days = me?.managed_weekdays ?? [];
-  const ordinary = days.filter((w) => w !== 6);
-  const saturdayOnly = !me?.is_admin && days.includes(6) && ordinary.length === 0;
-  if (saturdayOnly) {
-    return (
-      <Shell title="שבת" back="/">
-        <h2>שבת</h2>
-        <nav className="hub-grid" aria-label="שבת">
-          <Link className="hub-card" to="/schedule?weekday=6" aria-label="ניהול משמרת שבת">
-            <strong>ניהול משמרת</strong>
-            <span className="muted">סידור ליום שבת</span>
-          </Link>
-        </nav>
-      </Shell>
-    );
-  }
-  const future = ["אבטחות", "אט״ן", "קורס 60"];
+  if (me?.is_admin || me?.is_youth_manager) return <YouthManagementHub />;
+  return <DayManagerHub />;
+}
+
+function YouthManagementHub() {
   return (
     <Shell title="ניהול">
-      <nav className="hub-grid" aria-label="ניהול">
-        <Link className="hub-card" to="/schedule">
-          <strong>ניהול משמרת</strong>
-          <span className="muted">בחירת תאריך וניהול הסידור שלו</span>
+      <nav className="youth-grid" aria-label="ימים">
+        {[0, 1, 2, 3, 4, 5].map((wd) => (
+          <Link key={wd} className="hub-card" to={`/manage/day/${wd}`}>
+            <strong>{WEEKDAYS[wd]}</strong>
+          </Link>
+        ))}
+        <Link className="hub-card wide" to="/manage/day/6">
+          <strong>שבת</strong>
         </Link>
-        <Link className="hub-card" to="/manage/trainees">
+        <Link className="hub-card wide" to="/manage/trainees">
           <strong>חניכים</strong>
-          <span className="muted">התקדמות החניכים</span>
+          <span className="muted">התקדמות החניכים לפי יום</span>
         </Link>
-        {me?.is_admin && future.map((label) => (
-          <button key={label} type="button" className="hub-card" disabled>
+        <Link className="hub-card wide" to="/manage/appointments">
+          <strong>אחראי יום</strong>
+          <span className="muted">מינוי והחלפה של אחראי יום</span>
+        </Link>
+        {["אבטחות", "אט״ן", "קורס 60"].map((label) => (
+          <button key={label} type="button" className="hub-card wide" disabled>
             <strong>{label}</strong>
             <span className="muted">בקרוב</span>
           </button>
@@ -52,6 +59,90 @@ export function ManageHub() {
     </Shell>
   );
 }
+
+function DayManagerHub() {
+  const { me } = useAuth();
+  const days = [...(me?.managed_weekdays ?? [])].sort((a, b) => a - b);
+  const temporary = new Map((me?.temporary_days ?? []).map((t) => [t.weekday, t.ends_at]));
+  const [picked, setPicked] = useState<number | null>(null);
+  const chosen = days.length === 1 ? days[0] : picked;
+  const expiry = (wd: number) => {
+    const ends = temporary.get(wd);
+    return ends ? `עד ${fmtDateTime(ends)}` : null;
+  };
+  if (days.length === 0) return <Shell title="ניהול"><div className="card muted">אין לך הרשאות ניהול פעילות.</div></Shell>;
+
+  if (chosen === null) {
+    return (
+      <Shell title="ניהול" back="/">
+        <h2>בחירת יום לניהול</h2>
+        <nav className="hub-grid" aria-label="בחירת יום">
+          {days.map((wd) => (
+            <button key={wd} type="button" className="hub-card" onClick={() => setPicked(wd)}>
+              <strong>{DAY_NAME(wd)}</strong>
+              {expiry(wd) && <span className="muted">גישה זמנית {expiry(wd)}</span>}
+            </button>
+          ))}
+        </nav>
+      </Shell>
+    );
+  }
+  const isSaturday = chosen === 6;
+  const label = DAY_NAME(chosen);
+  return (
+    <Shell title={isSaturday ? "שבת" : "ניהול"} back={days.length > 1 ? "/manage" : "/"}>
+      <h2>{label}</h2>
+      {expiry(chosen) && <div className="notice" role="status">גישה זמנית {expiry(chosen)}</div>}
+      {days.length > 1 && (
+        <button type="button" className="btn small ghost" onClick={() => setPicked(null)}>החלפת יום</button>
+      )}
+      <nav className="hub-grid" aria-label={label}>
+        <Link className="hub-card" to={`/schedule?weekday=${chosen}`}>
+          <strong>ניהול משמרת</strong>
+          <span className="muted">הסידורים של {label}</span>
+        </Link>
+        {!isSaturday && (
+          <Link className="hub-card" to={`/manage/trainees/day/${chosen}`}>
+            <strong>חניכים</strong>
+            <span className="muted">חניכי {label}</span>
+          </Link>
+        )}
+      </nav>
+    </Shell>
+  );
+}
+
+// Trainee entry (decision of 2026-10-17): youth managers and admin pick a weekday; a Day Manager with one ordinary
+// day opens it directly. Saturday managers have no trainee access.
+export function TraineesEntry() {
+  const { me } = useAuth();
+  const youthView = !!(me?.is_admin || me?.is_youth_manager);
+  const ordinary = (me?.managed_weekdays ?? []).filter((w) => w !== 6).sort((a, b) => a - b);
+  if (!youthView && ordinary.length === 0) return <Navigate to="/manage" replace />;
+  if (!youthView && ordinary.length === 1) return <TraineeList weekday={ordinary[0]} back="/manage" />;
+  const choices = youthView ? [0, 1, 2, 3, 4, 5, 6] : ordinary;
+  return (
+    <Shell title="חניכים" back="/manage">
+      <h2>בחירת יום</h2>
+      <nav className="youth-grid" aria-label="בחירת יום לחניכים">
+        {choices.map((wd) => (
+          <Link key={wd} className="hub-card" to={`/manage/trainees/day/${wd}`}>
+            <strong>{DAY_NAME(wd)}</strong>
+          </Link>
+        ))}
+      </nav>
+    </Shell>
+  );
+}
+
+// One day's trainees. Back goes to the day picker (youth/admin) or to the management hub (Day Manager).
+export function TraineeDay({ weekday }: { weekday: number }) {
+  const { me } = useAuth();
+  const youthView = !!(me?.is_admin || me?.is_youth_manager);
+  if (!youthView && (weekday === 6 || !(me?.managed_weekdays ?? []).includes(weekday))) return <Navigate to="/manage" replace />;
+  return <TraineeList weekday={weekday} back={youthView ? "/manage/trainees" : "/manage"} />;
+}
+
 
 interface Person {
   user_id: string;
@@ -107,7 +198,7 @@ export function BoardPage() {
       setBoard(await api.post<Board>(`/api/manage/days/${dayId}/draft`));
       await loadRequests();
     } catch (e) {
-      setError(errorText(e));
+      setError(accessMessage(e));
     }
   }, [dayId, loadRequests]);
   useEffect(() => {
@@ -150,7 +241,7 @@ export function BoardPage() {
       setSaved(okText);
       setBoard(await api.get<Board>(`/api/manage/days/${dayId}/board`));
     } catch (e) {
-      setError(errorText(e));
+      setError(accessMessage(e));
       setBoard(await api.get<Board>(`/api/manage/days/${dayId}/board`).catch(() => board));
     }
   }

@@ -95,6 +95,9 @@ class ManagerDayScope(Base):
     __table_args__ = (
         CheckConstraint("weekday BETWEEN 0 AND 6", name="weekday"),
         Index("uq_scope_current", "user_id", "weekday", unique=True, postgresql_where=text("valid_to IS NULL")),
+        # One permanent weekday per person, and one permanent Day Manager per weekday (decision 2026-10-17).
+        Index("uq_one_permanent_scope_per_user", "user_id", unique=True, postgresql_where=text("valid_to IS NULL")),
+        Index("uq_one_permanent_manager_per_weekday", "weekday", unique=True, postgresql_where=text("valid_to IS NULL")),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -104,3 +107,28 @@ class ManagerDayScope(Base):
     valid_to: Mapped[datetime | None] = tstz(nullable=True)
     granted_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     revoked_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+
+
+class TemporaryDayManagerAppointment(Base):
+    """A manual, time-limited appointment of a mentor to manage one weekday (decision of 2026-10-17). Separate from
+    the permanent Day Manager scope and from the volunteer's base role, home day and permanent appointment.
+    Valid only while starts_at <= now < ends_at and not revoked. Rows are kept as history (never deleted).
+    Overlaps for the same weekday are refused by the service (per-weekday lock), not by a uniqueness constraint."""
+
+    __tablename__ = "temporary_day_manager_appointments"
+    __table_args__ = (
+        CheckConstraint("weekday BETWEEN 0 AND 6", name="weekday"),
+        CheckConstraint("ends_at > starts_at", name="interval"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    weekday: Mapped[int] = mapped_column(SmallInteger)
+    starts_at: Mapped[datetime] = tstz()
+    ends_at: Mapped[datetime] = tstz()
+    created_at: Mapped[datetime] = tstz()
+    created_by_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime | None] = tstz(nullable=True)
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    revoked_at: Mapped[datetime | None] = tstz(nullable=True)
+    revoked_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
