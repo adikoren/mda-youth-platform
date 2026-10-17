@@ -68,7 +68,7 @@ function App() {
       <Route path="/manage/trainees/day/:weekday" element={<Guard need="staff"><TraineeDayRoute /></Guard>} />
       <Route path="/manage/:dayId" element={<Guard need="manager"><BoardPage /></Guard>} />
       <Route path="/youth" element={<Navigate to="/manage" replace />} />
-      <Route path="/youth/managers" element={<Navigate to="/manage/appointments" replace />} />
+      <Route path="/youth/managers" element={<Navigate to="/manage" replace />} />
       <Route path="/youth/day/:weekday" element={<RedirectDay to={(w) => `/manage/day/${w}`} />} />
       <Route path="/youth/day/:weekday/volunteers" element={<RedirectDay to={(w) => `/manage/day/${w}/volunteers`} />} />
       <Route path="/admin" element={<Guard need="admin"><AdminUsers /></Guard>} />

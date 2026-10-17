@@ -45,10 +45,6 @@ function YouthManagementHub() {
           <strong>חניכים</strong>
           <span className="muted">התקדמות החניכים לפי יום</span>
         </Link>
-        <Link className="hub-card wide" to="/manage/appointments">
-          <strong>אחראי יום</strong>
-          <span className="muted">מינוי והחלפה של אחראי יום</span>
-        </Link>
         {["אבטחות", "אט״ן", "קורס 60"].map((label) => (
           <button key={label} type="button" className="hub-card wide" disabled>
             <strong>{label}</strong>

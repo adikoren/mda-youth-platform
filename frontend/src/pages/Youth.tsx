@@ -22,7 +22,7 @@ export function YouthDayPage() {
   if (!(me?.is_admin || me?.is_youth_manager)) return <Navigate to="/manage" replace />;
   if (!Number.isInteger(wd) || wd < 0 || wd > 6) return <Shell title="ניהול" back="/manage"><div className="card muted">היום לא נמצא.</div></Shell>;
   return (
-    <Shell title={DAY_LABEL(wd)} back="/manage">
+    <Shell title={DAY_LABEL(wd)} back="/manage" backDirect>
       <h2>{DAY_LABEL(wd)}</h2>
       <nav className="hub-grid" aria-label={DAY_LABEL(wd)}>
         <Link className="hub-card" to={`/manage/day/${wd}/volunteers`}>
@@ -50,6 +50,7 @@ interface DayVolunteers {
 // to the rest. The filter is kept in the address, so going back to this page restores it.
 export function YouthVolunteersPage() {
   const { weekday } = useParams();
+  const { me } = useAuth();
   const wd = Number(weekday);
   const [params, setParams] = useSearchParams();
   // Filter changes replace the current entry: "חזרה" never steps back through earlier filters.
@@ -64,7 +65,12 @@ export function YouthVolunteersPage() {
       {data.data && (
         <>
           <section className="card stack" aria-labelledby="pinned-mgr">
-            <strong id="pinned-mgr">אחראי/ת יום</strong>
+            <div className="row spread">
+              <strong id="pinned-mgr">אחראי/ת יום</strong>
+              {(me?.is_admin || me?.is_youth_manager) && (
+                <Link className="btn small" to={`/manage/appointments?weekday=${wd}`}>ניהול אחראי יום</Link>
+              )}
+            </div>
             {data.data.day_managers.length === 0 && <span className="muted">לא הוגדר אחראי/ת יום ליום זה.</span>}
             {data.data.day_managers.map((m) => (
               <div key={m.user_id} className="person">

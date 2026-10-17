@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -61,11 +61,15 @@ def _out(db: Session, appt: TemporaryDayManagerAppointment, now: datetime) -> di
 
 
 @router.get("/temporary")
-def list_temporary(actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
-                   now: datetime = Depends(now_dep)):
+def list_temporary(weekday: int | None = Query(None, ge=0, le=6), actor: Actor = Depends(get_active_actor),
+                   db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    """All appointments, or only one weekday's (the selected day's appointment screen)."""
     _manage_only(actor)
-    rows = list(db.scalars(select(TemporaryDayManagerAppointment).order_by(
-        TemporaryDayManagerAppointment.weekday, TemporaryDayManagerAppointment.starts_at.desc())))
+    q = select(TemporaryDayManagerAppointment)
+    if weekday is not None:
+        q = q.where(TemporaryDayManagerAppointment.weekday == weekday)
+    rows = list(db.scalars(q.order_by(TemporaryDayManagerAppointment.weekday,
+                                      TemporaryDayManagerAppointment.starts_at.desc())))
     return [_out(db, r, now) for r in rows]
 
 

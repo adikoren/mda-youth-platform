@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Navigate, NavLink, useSearchParams } from "react-router-dom";
 import { api, type Level } from "../../api";
 import { LEVEL, WEEKDAYS, fmtDateTime, phoneStatus } from "../../he";
 import { LevelBadge, Loading, Shell, errorText, useLoad } from "../../ui";
@@ -268,15 +268,15 @@ const STATUS_TEXT: Record<TempAppointment["status"], string> = {
 };
 const BLANK_FORM = { user: null as { id: string; full_name: string } | null, weekday: 0, starts: "", ends: "" };
 
-function TemporaryAppointments() {
-  const list = useLoad(() => api.get<TempAppointment[]>("/api/day-appointments/temporary"));
-  const [form, setForm] = useState(BLANK_FORM);
+function TemporaryAppointments({ weekday }: { weekday: number }) {
+  const list = useLoad(() => api.get<TempAppointment[]>(`/api/day-appointments/temporary?weekday=${weekday}`), [weekday]);
+  const [form, setForm] = useState({ ...BLANK_FORM, weekday });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  function reset() { setForm(BLANK_FORM); setEditingId(null); }
+  function reset() { setForm({ ...BLANK_FORM, weekday }); setEditingId(null); }
   async function save() {
     setErr(null); setNotice(null);
     try {
@@ -341,12 +341,7 @@ function TemporaryAppointments() {
         <strong>{editingId ? "עריכת מינוי" : "מינוי חדש"}</strong>
         {!editingId && <PersonPicker label="מתנדב/ת (חונך/ת פעיל/ה בלבד)" onPick={(u) => setForm({ ...form, user: { id: u.id, full_name: u.full_name } })} />}
         {form.user && <span className="muted">נבחר/ה: {form.user.full_name}</span>}
-        <label className="field">
-          יום לניהול
-          <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>
-            {WEEKDAYS.map((name, wd) => <option key={wd} value={wd}>{name}</option>)}
-          </select>
-        </label>
+        <span className="muted">יום לניהול: {weekday === 6 ? "שבת" : `יום ${WEEKDAYS[weekday]}`}</span>
         <label className="field">
           התחלה (שעון ישראל)
           <input type="datetime-local" dir="ltr" value={form.starts} onChange={(e) => setForm({ ...form, starts: e.target.value })} />
@@ -366,36 +361,49 @@ function TemporaryAppointments() {
   );
 }
 
+// Day Manager appointments for ONE weekday (decision of 2026-10-17). Reached from the selected day's volunteer list,
+// so the weekday comes from the address and is never chosen again here. Permanent replacement and temporary
+// appointments keep their rules; the backend enforces the same weekday scope.
 export function YouthManager() {
+  const [params] = useSearchParams();
+  const wdParam = params.get("weekday");
+  const weekday = wdParam !== null && /^[0-6]$/.test(wdParam) ? Number(wdParam) : null;
   const mgrs = useLoad(() => api.get<{ weekday: number; weekday_name: string; managers: { id: string; full_name: string }[] }[]>("/api/day-managers"));
   const [err, setErr] = useState<string | null>(null);
-  async function save(weekday: number, ids: string[]) {
+  if (weekday === null) return <Navigate to="/manage" replace />;
+  async function save(wd: number, ids: string[]) {
     try {
-      await api.put(`/api/day-managers/${weekday}`, { user_ids: ids });
+      await api.put(`/api/day-managers/${wd}`, { user_ids: ids });
       setErr(null);
       mgrs.reload();
     } catch (e) { setErr(errorText(e)); }
   }
+  const dayName = weekday === 6 ? "שבת" : `יום ${WEEKDAYS[weekday]}`;
+  const day = mgrs.data?.find((d) => d.weekday === weekday);
   return (
-    <Shell title="אחראי יום" back="/manage">
-      <Link className="btn" to="/manage/trainees">התקדמות חניכים (מספר נסיעות ותאריך אחרון)</Link>
-      <div className="muted">מינוי, החלפה והסרה של אחראי יום. אחראי יום חייב להיות חונך. צפייה בסידורים מפורסמים דרך לשונית "סידורים".</div>
+    <Shell title={`${dayName} · אחראי יום`} back={`/manage/day/${weekday}/volunteers`}>
+      <h2>{dayName}</h2>
+      <div className="muted">מינוי, החלפה והסרה של אחראי יום. אחראי יום חייב להיות חונך. ליום הזה יש אחראי קבוע אחד בלבד.</div>
       {err && <div className="error">{err}</div>}
-      <TemporaryAppointments />
-      {mgrs.data?.map((d) => (
-        <div key={d.weekday} className="card stack">
-          <h3>יום {d.weekday_name}</h3>
-          {d.managers.length === 0 && <span className="muted">אין אחראי</span>}
-          {d.managers.map((m) => (
+      {!mgrs.data && <Loading error={mgrs.error} />}
+      {day && (
+        <div className="card stack">
+          <strong>אחראי/ת קבוע/ה</strong>
+          {day.managers.length === 0 && <span className="muted">אין אחראי קבוע ליום הזה</span>}
+          {day.managers.map((m) => (
             <div key={m.id} className="person">
               <span className="name">{m.full_name}</span>
               <span className="badge">אחראי/ת קבוע/ה</span>
-              <button className="btn small ghost" onClick={() => save(d.weekday, d.managers.filter((x) => x.id !== m.id).map((x) => x.id))}>הסרה</button>
+              <button className="btn small ghost" onClick={() => save(weekday, [])}>הסרה</button>
             </div>
           ))}
-          <PersonPicker label="הוספת אחראי" onPick={(u) => save(d.weekday, [...d.managers.map((x) => x.id), u.id])} />
+          <PersonPicker
+            label={day.managers.length === 0 ? "מינוי אחראי קבוע" : "החלפת אחראי קבוע (הנוכחי יוסר)"}
+            onPick={(u) => save(weekday, [u.id])}
+          />
         </div>
-      ))}
+      )}
+      <TemporaryAppointments weekday={weekday} />
     </Shell>
   );
 }

@@ -166,3 +166,12 @@ def test_the_youth_day_list_shows_the_temporary_manager_separately(world, base_c
     body = Client(YM).get(f"/api/youth/days/{THU_WD}/volunteers").json()
     assert [m["user_id"] for m in body["day_managers"]] == [str(world.uid("thu_mgr"))]
     assert [t["user_id"] for t in body["temporary_managers"]] == [str(world.uid("thu_mentor"))]
+
+
+def test_the_list_is_scoped_to_one_weekday_and_refuses_others(world, base_clock):
+    ym = Client(YM)
+    temp(ym, world.uid("thu_mgr"), TUE_WD, f"{TUE}T08:00", f"{TUE}T12:00")
+    temp(ym, world.uid("thu_mentor"), THU_WD, f"{THU}T08:00", f"{THU}T12:00")
+    tue = ym.get(f"/api/day-appointments/temporary?weekday={TUE_WD}").json()
+    assert tue and all(a["weekday"] == TUE_WD for a in tue)
+    assert Client("thu.mgr@x.test").get(f"/api/day-appointments/temporary?weekday={TUE_WD}").status_code == 403
