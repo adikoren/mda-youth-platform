@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
-import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDM, fmtDateTime, fmtTime, phoneStatus } from "../he";
+import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime, phoneStatus } from "../he";
 import { LevelBadge, Loading, Shell, TimeRange, WhatsAppLink, errorText, useLoad } from "../ui";
 import { newRideId } from "../offline";
 import { NotificationNotice } from "./Journal";
@@ -460,34 +460,6 @@ interface PubSchedule {
   // Scheduled participants on the boarding order (סדר עלייה), in order. ambulance is null until placed.
   boarding: { position: number; shift: ShiftKind; user_id: string; full_name: string; level: PubPerson["level"];
               is_me: boolean; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }[];
-}
-
-// Active schedules first (nearest date first), then history (most recent first). A date becomes historical
-// automatically once all its shifts have ended (server time), so nothing is archived by hand.
-export function ScheduleList() {
-  const list = useLoad(() => api.get<{ items: (DaySummary & { historical: boolean })[] }>("/api/schedule"));
-  const items = list.data?.items ?? [];
-  const active = items.filter((d) => !d.historical).sort((a, b) => a.date.localeCompare(b.date));
-  const history = items.filter((d) => d.historical).sort((a, b) => b.date.localeCompare(a.date));
-  const row = (d: DaySummary) => (
-    <Link key={d.id} to={`/schedule/${d.id}`} className="card list-link">
-      <span><strong>סידור לתאריך {fmtDM(d.date)}</strong> <span className="muted">{WEEKDAYS[d.weekday]}</span></span>
-      <span className="muted">{DAY_KIND[d.kind]} ›</span>
-    </Link>
-  );
-  return (
-    <Shell title="סידורים">
-      {!list.data && <Loading error={list.error} />}
-      {list.data && items.length === 0 && <div className="card muted">אין סידורים מפורסמים שזמינים לך כרגע.</div>}
-      {active.map(row)}
-      {history.length > 0 && (
-        <section className="section">
-          <h3 className="section-title">היסטוריית סידורים</h3>
-          {history.map(row)}
-        </section>
-      )}
-    </Shell>
-  );
 }
 
 export function ScheduleView() {

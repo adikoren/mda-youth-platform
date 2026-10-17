@@ -1,71 +1,54 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type DaySummary, type Level, type ShiftKind } from "../../api";
+import { useAuth } from "../../auth";
 import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime } from "../../he";
-import { LevelBadge, Loading, Shell, TimeRange, errorText, useLoad } from "../../ui";
+import { LevelBadge, Loading, Shell, TimeRange, errorText } from "../../ui";
 
 // Ordered boarding list entry (סדר עלייה). Being on the list is scheduled participation.
 interface BoardingRow { position: number; shift: ShiftKind; shift_id: string; user_id: string; full_name: string;
   level: Level | null; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }
 
-// Compact accordion rows. The server decides sections and order; collapsed by default.
-function DayRow({ d }: { d: DaySummary }) {
-  const [open, setOpen] = useState(false);
-  const panelId = `day-panel-${d.id}`;
-  const status = d.is_published ? "פורסם" : "טרם פורסם";
+// Management hub, by role (decision of 2026-10-17). Hiding is not authorization: every destination enforces its own
+// rules on the server. Day Managers see exactly their two buttons; a Saturday-only manager sees Saturday alone;
+// Admin keeps full access. Future modules are visible but disabled, and open nothing.
+export function ManageHub() {
+  const { me } = useAuth();
+  const days = me?.managed_weekdays ?? [];
+  const ordinary = days.filter((w) => w !== 6);
+  const saturdayOnly = !me?.is_admin && days.includes(6) && ordinary.length === 0;
+  if (saturdayOnly) {
+    return (
+      <Shell title="שבת" back="/">
+        <h2>שבת</h2>
+        <nav className="hub-grid" aria-label="שבת">
+          <Link className="hub-card" to="/schedule?weekday=6" aria-label="ניהול משמרת שבת">
+            <strong>ניהול משמרת</strong>
+            <span className="muted">סידור ליום שבת</span>
+          </Link>
+        </nav>
+      </Shell>
+    );
+  }
+  const future = ["אבטחות", "אט״ן", "קורס 60"];
   return (
-    <div className={`day-row${open ? " open" : ""}`}>
-      <button type="button" className="day-row-head" aria-expanded={open} aria-controls={panelId}
-              onClick={() => setOpen(!open)}>
-        <strong className="day-row-title">{dayTitle(d)}</strong>
-        <span className="day-row-status">
-          <span className={`badge${d.is_published ? " pub" : ""}`}>{status}</span>
-          {d.draft_dirty && <span className="badge late">שינויים לא פורסמו</span>}
-          {!!d.attention_count && <span className="badge red">נדרש טיפול: {d.attention_count}</span>}
-        </span>
-        <span className="day-row-chev" aria-hidden>{open ? "▴" : "▾"}</span>
-      </button>
-      {open && (
-        <div className="day-row-panel" id={panelId}>
-          <div className="muted">
-            {d.kind !== "regular" && <span>{DAY_KIND[d.kind]} · </span>}
-            {WINDOW[d.window]}
-          </div>
-          <div className="muted">יעד פרסום: {fmtDateTime(d.publish_target_at)}</div>
-          <Link className="btn small primary" to={`/manage/${d.id}`}>ניהול הסידור</Link>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Dates to manage: the main list is today through the next seven days (Asia/Jerusalem); completed dates are
-// in history. The server decides the section; this page only shows it.
-export function ManageDays() {
-  const days = useLoad(() => api.get<(DaySummary & { section: "main" | "history" })[]>("/api/manage/days"));
-  const main = (days.data ?? []).filter((d) => d.section === "main");
-  const history = (days.data ?? []).filter((d) => d.section === "history");
-  const [historyOpen, setHistoryOpen] = useState(false);
-  return (
-    <Shell title="ניהול סידורים">
-      <Link className="btn" to="/manage/trainees">חניכים — יומנים והתקדמות</Link>
-      {!days.data && <Loading error={days.error} />}
-      {days.data && main.length === 0 && <div className="card muted">אין ימים בניהולך בשבעת הימים הקרובים.</div>}
-      {main.length > 0 && <div className="day-list">{main.map((d) => <DayRow key={d.id} d={d} />)}</div>}
-      {history.length > 0 && (
-        <section className="section">
-          <button type="button" className="day-row-head history-toggle" aria-expanded={historyOpen}
-                  aria-controls="history-panel" onClick={() => setHistoryOpen(!historyOpen)}>
-            <strong className="day-row-title">היסטוריית סידורים ({history.length})</strong>
-            <span className="day-row-chev" aria-hidden>{historyOpen ? "▴" : "▾"}</span>
+    <Shell title="ניהול">
+      <nav className="hub-grid" aria-label="ניהול">
+        <Link className="hub-card" to="/schedule">
+          <strong>ניהול משמרת</strong>
+          <span className="muted">בחירת תאריך וניהול הסידור שלו</span>
+        </Link>
+        <Link className="hub-card" to="/manage/trainees">
+          <strong>חניכים</strong>
+          <span className="muted">התקדמות החניכים</span>
+        </Link>
+        {me?.is_admin && future.map((label) => (
+          <button key={label} type="button" className="hub-card" disabled>
+            <strong>{label}</strong>
+            <span className="muted">בקרוב</span>
           </button>
-          {historyOpen && (
-            <div className="day-list" id="history-panel">
-              {history.map((d) => <DayRow key={d.id} d={d} />)}
-            </div>
-          )}
-        </section>
-      )}
+        ))}
+      </nav>
     </Shell>
   );
 }
@@ -183,11 +166,11 @@ export function BoardPage() {
     await load();
   }
 
-  if (!board) return <Shell title="בניית סידור" back="/manage"><Loading error={error} /></Shell>;
+  if (!board) return <Shell title="בניית סידור" back="/schedule"><Loading error={error} /></Shell>;
   const allSlots = (sh: BoardShift) => sh.slots.filter((s) => s.status === "active");
 
   return (
-    <Shell title={dayTitle(board.day)} back="/manage">
+    <Shell title={dayTitle(board.day)} back="/schedule">
       <div className="card stack">
         <div className="row spread">
           <strong>{DAY_KIND[board.day.kind]}</strong>

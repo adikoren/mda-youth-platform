@@ -286,3 +286,21 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .day-row-panel .btn { justify-self: start; }
 .history-toggle { border: 1px solid var(--line); border-radius: 10px; }
 .badge.pub { background: var(--red-050); color: var(--red-700); border-color: var(--red-100); }
+
+/* ---- management hub ---- */
+.hub-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.hub-card { display: grid; gap: 4px; align-content: start; min-height: 96px; padding: 14px; text-align: start;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
+.hub-card strong { color: var(--red-700); font-size: 1rem; }
+.hub-card:focus-visible { outline: 3px solid var(--red-600); outline-offset: 2px; }
+.hub-card:disabled { cursor: default; color: var(--muted); background: #f7f8fa; }
+.hub-card:disabled strong { color: var(--muted); }
+
+/* ---- youth manager area ---- */
+.youth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.youth-grid .hub-card.wide { grid-column: 1 / -1; }
+.hub-card.wide { grid-column: 1 / -1; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.chip { min-height: 40px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--red-600); border-color: var(--red-600); color: #fff; font-weight: 600; }
+.chip:focus-visible { outline: 3px solid var(--red-600); outline-offset: 2px; }

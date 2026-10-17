@@ -107,6 +107,29 @@ def list_day_managers(actor: Actor = Depends(get_active_actor), db: Session = De
     return out
 
 
+@router.get("/youth/days/{weekday}/volunteers")
+def youth_day_volunteers(weekday: int, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db)):
+    """Volunteers whose home day is this weekday, with the day manager(s) pinned first (decision of 2026-10-17).
+    Youth Manager and Admin only. A missing day manager is reported as an empty list, never invented."""
+    if not (actor.is_admin or actor.is_youth_manager):
+        raise not_found()
+    if not 0 <= weekday <= 6:
+        raise not_found()
+    from app.scheduling.pool import people
+    manager_ids = accounts.day_managers_for(db, weekday)
+    member_ids = list(db.scalars(
+        select(DayMembership.user_id).join(User, User.id == DayMembership.user_id)
+        .where(DayMembership.weekday == weekday, DayMembership.valid_to.is_(None), User.status == "active")))
+    info = people(db, set(member_ids) | set(manager_ids))
+    managers = [{"user_id": str(uid), "full_name": info[uid].full_name, "level": info[uid].level}
+                for uid in manager_ids if uid in info]
+    volunteers = sorted(({"user_id": str(uid), "full_name": info[uid].full_name, "level": info[uid].level}
+                         for uid in member_ids if uid not in manager_ids and uid in info),
+                        key=lambda v: v["full_name"])
+    return {"weekday": weekday, "weekday_name": WEEKDAY_NAMES_HE[weekday], "day_managers": managers,
+            "volunteers": volunteers}
+
+
 @router.put("/day-managers/{weekday}")
 def set_day_managers(weekday: int, body: ManagersIn, actor: Actor = Depends(get_active_actor),
                      db: Session = Depends(get_db), now: datetime = Depends(now_dep)):

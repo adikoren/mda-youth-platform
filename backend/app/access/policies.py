@@ -151,3 +151,9 @@ def can_register_for_day(db: Session, actor: Actor, day: ActivityDay, now: datet
     if weekday == SATURDAY or actor.home_weekday == weekday:
         return True
     return has_open_invitation(db, actor, day, now)
+
+
+def can_view_day_volunteers(actor: Actor) -> bool:
+    """The selected-day volunteer list under "אחראי נוער": Youth Manager and Admin only. A Day Manager does not
+    get it merely by managing a day."""
+    return actor.is_active and (actor.is_admin or actor.is_youth_manager)

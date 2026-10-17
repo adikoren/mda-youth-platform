@@ -3,11 +3,13 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, isManager, useAuth } from "./auth";
 import { Login, Pending, Signup } from "./pages/Auth";
-import { History, Home, RegisterDay, ScheduleList, ScheduleView } from "./pages/Volunteer";
-import { BoardPage, ManageDays } from "./pages/manage/Manage";
+import { History, Home, RegisterDay, ScheduleView } from "./pages/Volunteer";
+import { ScheduleDaysPage } from "./pages/ScheduleDays";
+import { BoardPage, ManageHub } from "./pages/manage/Manage";
 import { ProfilePage } from "./pages/Profile";
 import { JournalPage, ManagerTrainees, MentorHome, NotesPage, NotificationsHelp, OfflineHome } from "./pages/Journal";
 import { AdminAudit, AdminCalendar, AdminOutbox, AdminUsers, YouthManager } from "./pages/admin/Admin";
+import { YouthDayPage, YouthHub, YouthVolunteersPage } from "./pages/Youth";
 import "./styles.css";
 
 // Route guards only shape navigation; every rule is enforced again by the API.
@@ -36,7 +38,7 @@ function App() {
       <Route path="/pending" element={<Pending />} />
       <Route path="/" element={<Guard><Home /></Guard>} />
       <Route path="/register/:dayId" element={<Guard><RegisterDay /></Guard>} />
-      <Route path="/schedule" element={<Guard><ScheduleList /></Guard>} />
+      <Route path="/schedule" element={<Guard><ScheduleDaysPage /></Guard>} />
       <Route path="/schedule/:dayId" element={<Guard><ScheduleView /></Guard>} />
       <Route path="/history" element={<Guard><History /></Guard>} />
       <Route path="/journal" element={<Guard><JournalPage /></Guard>} />
@@ -46,9 +48,12 @@ function App() {
       <Route path="/notifications" element={<Guard><NotificationsHelp /></Guard>} />
       <Route path="/people/:userId" element={<Guard><ProfilePage /></Guard>} />
       <Route path="/manage/trainees" element={<Guard need="staff"><ManagerTrainees /></Guard>} />
-      <Route path="/manage" element={<Guard need="manager"><ManageDays /></Guard>} />
+      <Route path="/manage" element={<Guard need="manager"><ManageHub /></Guard>} />
       <Route path="/manage/:dayId" element={<Guard need="manager"><BoardPage /></Guard>} />
-      <Route path="/youth" element={<Guard need="youth"><YouthManager /></Guard>} />
+      <Route path="/youth" element={<Guard need="youth"><YouthHub /></Guard>} />
+      <Route path="/youth/managers" element={<Guard need="youth"><YouthManager /></Guard>} />
+      <Route path="/youth/day/:weekday" element={<Guard need="youth"><YouthDayPage /></Guard>} />
+      <Route path="/youth/day/:weekday/volunteers" element={<Guard need="youth"><YouthVolunteersPage /></Guard>} />
       <Route path="/admin" element={<Guard need="admin"><AdminUsers /></Guard>} />
       <Route path="/admin/calendar" element={<Guard need="admin"><AdminCalendar /></Guard>} />
       <Route path="/admin/outbox" element={<Guard need="admin"><AdminOutbox /></Guard>} />
