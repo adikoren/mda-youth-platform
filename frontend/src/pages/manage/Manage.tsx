@@ -8,35 +8,62 @@ import { LevelBadge, Loading, Shell, TimeRange, errorText, useLoad } from "../..
 interface BoardingRow { position: number; shift: ShiftKind; shift_id: string; user_id: string; full_name: string;
   level: Level | null; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }
 
+// Compact accordion rows. The server decides sections and order; collapsed by default.
+function DayRow({ d }: { d: DaySummary }) {
+  const [open, setOpen] = useState(false);
+  const panelId = `day-panel-${d.id}`;
+  const status = d.is_published ? "פורסם" : "טרם פורסם";
+  return (
+    <div className={`day-row${open ? " open" : ""}`}>
+      <button type="button" className="day-row-head" aria-expanded={open} aria-controls={panelId}
+              onClick={() => setOpen(!open)}>
+        <strong className="day-row-title">{dayTitle(d)}</strong>
+        <span className="day-row-status">
+          <span className={`badge${d.is_published ? " pub" : ""}`}>{status}</span>
+          {d.draft_dirty && <span className="badge late">שינויים לא פורסמו</span>}
+          {!!d.attention_count && <span className="badge red">נדרש טיפול: {d.attention_count}</span>}
+        </span>
+        <span className="day-row-chev" aria-hidden>{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <div className="day-row-panel" id={panelId}>
+          <div className="muted">
+            {d.kind !== "regular" && <span>{DAY_KIND[d.kind]} · </span>}
+            {WINDOW[d.window]}
+          </div>
+          <div className="muted">יעד פרסום: {fmtDateTime(d.publish_target_at)}</div>
+          <Link className="btn small primary" to={`/manage/${d.id}`}>ניהול הסידור</Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Dates to manage: the main list is today through the next seven days (Asia/Jerusalem); completed dates are
 // in history. The server decides the section; this page only shows it.
 export function ManageDays() {
   const days = useLoad(() => api.get<(DaySummary & { section: "main" | "history" })[]>("/api/manage/days"));
   const main = (days.data ?? []).filter((d) => d.section === "main");
   const history = (days.data ?? []).filter((d) => d.section === "history");
-  const row = (d: DaySummary) => (
-    <Link key={d.id} to={`/manage/${d.id}`} className="card stack" style={{ textDecoration: "none", color: "inherit" }}>
-      <div className="row spread">
-        <strong>{dayTitle(d)}</strong>
-        <span className="row">
-          {d.is_published ? <span className="badge youth">פורסם</span> : <span className="badge">טרם פורסם</span>}
-          {d.draft_dirty && <span className="badge late">שינויים לא פורסמו</span>}
-          {!!d.attention_count && <span className="badge red">נדרש טיפול: {d.attention_count}</span>}
-        </span>
-      </div>
-      <div className="muted">{DAY_KIND[d.kind]} · {WINDOW[d.window]} · יעד פרסום {fmtDateTime(d.publish_target_at)}</div>
-    </Link>
-  );
+  const [historyOpen, setHistoryOpen] = useState(false);
   return (
     <Shell title="ניהול סידורים">
       <Link className="btn" to="/manage/trainees">חניכים — יומנים והתקדמות</Link>
       {!days.data && <Loading error={days.error} />}
       {days.data && main.length === 0 && <div className="card muted">אין ימים בניהולך בשבעת הימים הקרובים.</div>}
-      {main.map(row)}
+      {main.length > 0 && <div className="day-list">{main.map((d) => <DayRow key={d.id} d={d} />)}</div>}
       {history.length > 0 && (
         <section className="section">
-          <h3 className="section-title">היסטוריה</h3>
-          {history.map(row)}
+          <button type="button" className="day-row-head history-toggle" aria-expanded={historyOpen}
+                  aria-controls="history-panel" onClick={() => setHistoryOpen(!historyOpen)}>
+            <strong className="day-row-title">היסטוריית סידורים ({history.length})</strong>
+            <span className="day-row-chev" aria-hidden>{historyOpen ? "▴" : "▾"}</span>
+          </button>
+          {historyOpen && (
+            <div className="day-list" id="history-panel">
+              {history.map((d) => <DayRow key={d.id} d={d} />)}
+            </div>
+          )}
         </section>
       )}
     </Shell>

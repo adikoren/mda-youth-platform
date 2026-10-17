@@ -272,3 +272,17 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .boarding-list { margin: 0; padding-inline-start: 1.4rem; display: grid; gap: 6px; }
 .operator-form summary { cursor: pointer; color: var(--ink-2); font-size: .9rem; min-height: 40px; display: flex; align-items: center; }
 .operator-form input[type="time"] { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; }
+
+/* ---- manager date list: compact accordion rows ---- */
+.day-list { display: grid; gap: 6px; margin-top: 8px; }
+.day-row { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.day-row-head { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 12px;
+  background: #fff; border: 0; color: var(--ink); font: inherit; text-align: start; cursor: pointer; }
+.day-row-head:focus-visible { outline: 3px solid var(--red-600); outline-offset: -3px; }
+.day-row-title { flex: 1 1 auto; font-size: .95rem; }
+.day-row-status { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.day-row-chev { color: var(--muted); flex: none; }
+.day-row-panel { display: grid; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid var(--line-2); font-size: .9rem; }
+.day-row-panel .btn { justify-self: start; }
+.history-toggle { border: 1px solid var(--line); border-radius: 10px; }
+.badge.pub { background: var(--red-050); color: var(--red-700); border-color: var(--red-100); }
