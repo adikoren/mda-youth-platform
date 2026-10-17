@@ -410,15 +410,18 @@ def set_order(db: Session, actor: Actor, shift_id: uuid.UUID, user_ids: list[uui
 
 
 def set_morning_registration(db: Session, actor: Actor, shift_id: uuid.UUID, open_: bool, now: datetime) -> bool:
-    """Explicitly open (or close) self-registration for a Sunday–Friday morning shift. Saturday morning
-    is always open. Closing hides the shift from registration screens; answers already given are kept
-    (they stay in the manager's pool) and assignments/history are untouched."""
+    """Explicitly open (or close) self-registration for a Sunday–Friday morning or reinforcement shift (decision of
+    2026-10-17: reinforcement uses the same switch). Saturday morning is always open. Closing hides the shift from
+    registration screens; answers already given are kept (they stay in the manager's pool) and assignments and
+    history are untouched."""
     shift = _shift(db, shift_id)
     day = lock_day(db, shift.activity_day_id)
     require_manage_day(actor, day)
-    if shift.kind != "morning":
-        raise bad_request("not_morning", "אפשר לפתוח או לסגור להרשמה רק משמרת בוקר")
-    if local_weekday(day.local_date) == SATURDAY:
+    if shift.kind not in ("morning", "reinforcement"):
+        raise bad_request("not_toggleable", "אפשר לפתוח או לסגור להרשמה רק משמרת בוקר או תגבור")
+    if open_ and shift.kind == "reinforcement" and day.latest_published_version_id is not None:
+        raise conflict("schedule_published", "אחרי פרסום הסידור אי אפשר לפתוח הרשמה חדשה לתגבור")
+    if shift.kind == "morning" and local_weekday(day.local_date) == SATURDAY:
         raise conflict("saturday_fixed", "משמרת בוקר בשבת פתוחה תמיד להרשמה")
     if now >= local_midnight_after(day.local_date):
         raise conflict("day_ended", "התאריך כבר עבר")
@@ -427,8 +430,10 @@ def set_morning_registration(db: Session, actor: Actor, shift_id: uuid.UUID, ope
         return False
     shift.self_selectable = open_
     day.row_version += 1
-    record(db, actor_id=actor.user_id, action="morning_registration_open" if open_ else "morning_registration_close",
-           object_type="shift", object_id=shift.id, now=now, meta={"date": day.local_date.isoformat()})
+    record(db, actor_id=actor.user_id,
+           action=f"{shift.kind}_registration_open" if open_ else f"{shift.kind}_registration_close",
+           object_type="shift", object_id=shift.id, now=now,
+           meta={"date": day.local_date.isoformat(), "kind": shift.kind})
     db.commit()
     return True
 
@@ -476,7 +481,8 @@ def _add_baseline_slots(db: Session, version_id: uuid.UUID, shift: Shift) -> Non
         db.add(AmbulanceSlot(version_id=version_id, shift_id=shift.id, ordinal=i + 1, capacity=DEFAULT_CAPACITY))
 
 
-def add_shift_type(db: Session, actor: Actor, day_id: uuid.UUID, kind: str, now: datetime) -> Shift:
+def add_shift_type(db: Session, actor: Actor, day_id: uuid.UUID, kind: str, now: datetime,
+                   open_registration: bool = False) -> Shift:
     """Adds an allowed shift type to a date (decision 2026-10-16). Allowed after registration opens, including
     after publication. It never reopens registration or joining: after publication the new type is not
     self-selectable and volunteers cannot request it. The Day Manager assigns people directly. Published rows
@@ -490,7 +496,9 @@ def add_shift_type(db: Session, actor: Actor, day_id: uuid.UUID, kind: str, now:
         raise bad_request("shift_not_allowed", "סוג המשמרת אינו מותר ליום זה")
     if db.scalar(select(Shift.id).where(Shift.activity_day_id == day.id, Shift.kind == kind)) is not None:
         raise conflict("shift_exists", "המשמרת הזו כבר קיימת ביום זה")
-    shift = build_shift(day, template_for(day.kind, kind))
+    if open_registration and day.latest_published_version_id is not None:
+        raise conflict("schedule_published", "אחרי פרסום הסידור אי אפשר לפתוח הרשמה חדשה למשמרת")
+    shift = build_shift(day, template_for(day.kind, kind), open_registration)
     if day.latest_published_version_id is not None:
         shift.self_selectable = False  # publication closes joining; a new type must not open it
     db.add(shift)

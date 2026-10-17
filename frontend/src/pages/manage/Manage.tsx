@@ -181,6 +181,8 @@ export function BoardPage() {
   const [board, setBoard] = useState<Board | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  // Adding reinforcement may open volunteer registration at once (before publication only). Separate, explicit choice.
+  const [openReinforcementNow, setOpenReinforcementNow] = useState(false);
 
   const [requests, setRequests] = useState<{ id: string; full_name: string; message: string; shift: string | null; status: string; created_at: string; resolved_at: string | null }[]>([]);
 
@@ -325,11 +327,19 @@ export function BoardPage() {
         return (
           <section className="card stack">
             <strong>הוספת סוג משמרת</strong>
-            <span className="muted">אפשר להוסיף אחרי פתיחת ההרשמה, גם אחרי פרסום. המשמרת לא פותחת הרשמה מחדש ולא מאפשרת בקשות הצטרפות. משבצים ישירות. מתנדבי היום הביתי יקבלו הודעה.</span>
+            <span className="muted">הוספת משמרת לא פותחת הרשמה למתנדבים. לתגבור אפשר לפתוח הרשמה במפורש לפני הפרסום בלבד. אחרי פרסום לא נפתחת הרשמה חדשה. משבצים ישירות. מתנדבי היום הביתי יקבלו הודעה.</span>
+            {missing.includes("reinforcement") && !board.published && (
+              <label className="field">
+                <input type="checkbox" checked={openReinforcementNow}
+                       onChange={(e) => setOpenReinforcementNow(e.target.checked)} />
+                לתגבור: פתיחת הרשמה למתנדבים מיד
+              </label>
+            )}
             <div className="row">
               {missing.map((k) => (
                 <button key={k} className="btn small" onClick={() => act(
-                  () => api.post(`/api/manage/days/${dayId}/shifts`, { kind: k }), `נוספה משמרת ${SHIFT[k]}`)}>
+                  () => api.post(`/api/manage/days/${dayId}/shifts`, { kind: k, open_registration: k === "reinforcement" && openReinforcementNow }),
+                  `נוספה משמרת ${SHIFT[k]}`)}>
                   + משמרת {SHIFT[k]}
                 </button>
               ))}
@@ -406,11 +416,18 @@ export function BoardPage() {
               <span className={sh.self_selectable ? "badge youth" : "badge"}>
                 {sh.self_selectable ? "פתוחה להרשמת מתנדבים" : "לא מוצגת להרשמה (שיבוץ ידני בלבד)"}
               </span>
-              <button className="btn small" onClick={() => act(
+              {/* After publication, reinforcement registration cannot be newly opened (existing answers can be closed). */}
+              <button className="btn small" disabled={!sh.self_selectable && !!board.published && sh.kind === "reinforcement"}
+                      onClick={() => act(
                 () => api.post(`/api/manage/shifts/${sh.id}/registration`, { open: !sh.self_selectable }),
-                sh.self_selectable ? "הבוקר הוסתר מההרשמה. תשובות קיימות נשמרו" : "הבוקר נפתח להרשמה")}>
+                sh.self_selectable
+                  ? `${sh.kind === "morning" ? "הבוקר" : "התגבור"} הוסתר מההרשמה. תשובות קיימות נשמרו`
+                  : `${sh.kind === "morning" ? "הבוקר" : "התגבור"} נפתח להרשמה`)}>
                 {sh.self_selectable ? "הסתרה מההרשמה" : "פתיחה להרשמה"}
               </button>
+              {!sh.self_selectable && !!board.published && sh.kind === "reinforcement" && (
+                <span className="muted">אחרי הפרסום אי אפשר לפתוח הרשמה חדשה לתגבור</span>
+              )}
             </div>
           )}
 

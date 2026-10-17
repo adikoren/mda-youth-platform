@@ -183,7 +183,7 @@ export function Home() {
                       להרשמה למשמרת
                     </Link>
                   ) : (
-                    <Link className="btn small" to={`/register/${r.activity_day_id}`} aria-label={`פתיחת ${label}`}>פתיחה</Link>
+                    <Link className="btn small" to={`/register/${r.activity_day_id}`} aria-label={`לצפייה בסידור ${label}`}>לצפייה בסידור</Link>
                   )}
                 </span>
               </div>

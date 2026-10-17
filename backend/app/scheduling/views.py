@@ -38,7 +38,7 @@ def _shift_out(s: Shift) -> dict:
     return {"id": str(s.id), "kind": s.kind, "starts_at": s.starts_at, "ends_at": s.ends_at, "arrival_at": s.arrival_at,
             "self_selectable": s.self_selectable,
             # Sunday–Friday mornings are opened for registration explicitly by a manager.
-            "registration_toggle": s.kind == "morning" and local_weekday(local_today(s.starts_at)) != SATURDAY}
+            "registration_toggle": s.kind in ("morning", "reinforcement") and local_weekday(local_today(s.starts_at)) != SATURDAY}
 
 
 # Crew order inside an ambulance (decision 2026-10-16): mentor, then youth volunteer, then trainee positions.

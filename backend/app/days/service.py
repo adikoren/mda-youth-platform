@@ -136,15 +136,21 @@ def opens_by_default(kind: str, d: date) -> bool:
     return kind != "morning" or local_weekday(d) == SATURDAY
 
 
-def build_shift(day: ActivityDay, t: ShiftTemplate) -> Shift:
-    """One shift from its approved template (times and ambulance baseline are the spec defaults)."""
+def build_shift(day: ActivityDay, t: ShiftTemplate, open_registration: bool = False) -> Shift:
+    """One shift from its approved template (times and ambulance baseline are the spec defaults).
+    Opening a shift and opening volunteer registration are separate: a shift is created closed for
+    reinforcement unless the manager explicitly opens it during setup (open_registration=True)."""
+    if t.kind == "reinforcement":
+        selectable = open_registration
+    else:
+        selectable = t.self_selectable and opens_by_default(t.kind, day.local_date)
     return Shift(
         activity_day_id=day.id,
         kind=t.kind,
         arrival_at=local_dt(day.local_date, t.arrival),
         starts_at=local_dt(day.local_date, t.start),
         ends_at=local_dt(day.local_date, t.end),
-        self_selectable=t.self_selectable and opens_by_default(t.kind, day.local_date),
+        self_selectable=selectable,
         allows_late_arrival=t.allows_late_arrival,
         baseline_slots=t.baseline_slots,
     )
@@ -163,12 +169,13 @@ def validate_shift_kinds(day_kind: str, kinds: tuple[str, ...]) -> tuple[str, ..
     return tuple(k for k in allowed if k in kinds)  # stable order
 
 
-def _build_shifts(day: ActivityDay, kinds: tuple[str, ...]) -> list[Shift]:
-    return [build_shift(day, t) for t in shift_templates_for(day.kind) if t.kind in kinds]
+def _build_shifts(day: ActivityDay, kinds: tuple[str, ...], open_kinds: tuple[str, ...] = ()) -> list[Shift]:
+    return [build_shift(day, t, t.kind in open_kinds) for t in shift_templates_for(day.kind) if t.kind in kinds]
 
 
 def create_day(db: Session, d: date, now: datetime, by: uuid.UUID | None = None, kind: str | None = None,
-               shift_kinds: tuple[str, ...] | None = DEFAULT_SHIFT_KINDS) -> ActivityDay:
+               shift_kinds: tuple[str, ...] | None = DEFAULT_SHIFT_KINDS,
+               open_registration: tuple[str, ...] = ()) -> ActivityDay:
     """shift_kinds=None means every shift type allowed for the day kind (used by seeding and tests that need
     the full day). Otherwise only the given types are created; a date always contains evening."""
     station = get_station(db)
@@ -184,7 +191,9 @@ def create_day(db: Session, d: date, now: datetime, by: uuid.UUID | None = None,
                       registration_closes_at=closes, publish_target_at=target, created_at=now)
     db.add(day)
     db.flush()
-    db.add_all(_build_shifts(day, kinds))
+    if not set(open_registration) <= set(kinds):
+        raise bad_request("open_not_selected", "אפשר לפתוח הרשמה רק למשמרת שנבחרה ליום")
+    db.add_all(_build_shifts(day, kinds, tuple(open_registration)))
     record(db, actor_id=by, action="day_create", object_type="activity_day", object_id=day.id, now=now,
            meta={"date": d.isoformat(), "kind": kind, "shifts": list(kinds)})
     return day

@@ -243,12 +243,14 @@ def publish(day_id: uuid.UUID, body: PublishIn, actor: Actor = Depends(get_activ
 class ShiftTypeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: str = Field(pattern="^(morning|reinforcement)$")  # evening always exists
+    # Explicitly open volunteer registration when adding the type (before publication only). Never automatic.
+    open_registration: bool = False
 
 
 @manage.post("/days/{day_id}/shifts", status_code=201)
 def add_shift_type(day_id: uuid.UUID, body: ShiftTypeIn, actor: Actor = Depends(get_active_actor),
                    db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
-    shift = service.add_shift_type(db, actor, day_id, body.kind, now)
+    shift = service.add_shift_type(db, actor, day_id, body.kind, now, body.open_registration)
     return {"id": str(shift.id), "kind": shift.kind}
 
 
