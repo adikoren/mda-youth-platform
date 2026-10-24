@@ -147,7 +147,9 @@ def world(db, clock):
     db.flush()
     accounts.set_day_managers(db, 4, [U["thu_mgr"].id], None, now)
     accounts.set_day_managers(db, 6, [U["sat_mgr"].id], None, now)
-    days.generate_days(db, date(2026, 10, 11), date(2026, 10, 31), now)
+    # Full days (every shift type the day kind allows) so existing scenarios keep their meaning. The default for
+    # new dates is evening only (decision 2026-10-16); tests of that default call create_day directly.
+    days.generate_days(db, date(2026, 10, 11), date(2026, 10, 31), now, shift_kinds=None)
     db.commit()
     D = {d.local_date.isoformat(): d for d in db.query(days.ActivityDay).all()}
     return World(U, D)

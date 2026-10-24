@@ -4,6 +4,7 @@ Nothing here comes from the client: roles, scopes and memberships are read fresh
 changes, transfers and revocations apply on the next request without re-login."""
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,8 @@ class Actor:
     is_admin: bool = False
     is_youth_manager: bool = False
     managed_weekdays: frozenset[int] = field(default_factory=frozenset)
+    # weekday -> end of a temporary appointment valid now (already included in managed_weekdays)
+    temporary_weekdays: dict[int, datetime] = field(default_factory=dict)
 
     @property
     def is_active(self) -> bool:
@@ -36,7 +39,7 @@ class Actor:
         return self.level == "trainee"
 
 
-def load_actor(db: Session, user_id: uuid.UUID) -> Actor | None:
+def load_actor(db: Session, user_id: uuid.UUID, now: datetime | None = None) -> Actor | None:
     user = db.get(User, user_id)
     if user is None:
         return None
@@ -59,6 +62,11 @@ def load_actor(db: Session, user_id: uuid.UUID) -> Actor | None:
         )
     )
     active = user.status == "active"
+    # Temporary appointments count only while valid at server time (checked on every request).
+    from app.accounts.temporary import active_weekdays
+    from app.access.clock import get_clock
+    moment = now or get_clock().now()
+    temporary = active_weekdays(db, user_id, moment) if active else {}
     return Actor(
         user_id=user.id,
         full_name=user.full_name,
@@ -69,5 +77,6 @@ def load_actor(db: Session, user_id: uuid.UUID) -> Actor | None:
         # Authority only counts while the account is active.
         is_admin=active and "admin" in roles,
         is_youth_manager=active and "youth_manager" in roles,
-        managed_weekdays=scopes if active else frozenset(),
+        managed_weekdays=(scopes | frozenset(temporary)) if active else frozenset(),
+        temporary_weekdays=temporary if active else {},
     )

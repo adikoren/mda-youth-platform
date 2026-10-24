@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Navigate, NavLink, useSearchParams } from "react-router-dom";
 import { api, type Level } from "../../api";
 import { LEVEL, WEEKDAYS, fmtDateTime, phoneStatus } from "../../he";
 import { LevelBadge, Loading, Shell, errorText, useLoad } from "../../ui";
@@ -255,34 +255,155 @@ export function AdminAudit() {
   );
 }
 
+// Temporary Day Manager appointments (decision of 2026-10-17): time-limited cover of one weekday by a mentor. Only
+// the Youth Manager and Admin manage them. Times are Asia/Jerusalem wall clock. Permanent managers are unaffected.
+interface TempAppointment {
+  id: string; user_id: string; full_name: string; level: Level | null; weekday: number; weekday_name: string;
+  starts: string; ends: string; status: "scheduled" | "active" | "expired" | "revoked";
+  created_by: string; created_at: string; updated_by: string | null; updated_at: string | null;
+  revoked_by: string | null; revoked_at: string | null;
+}
+const STATUS_TEXT: Record<TempAppointment["status"], string> = {
+  scheduled: "מתוזמן", active: "פעיל", expired: "הסתיים", revoked: "בוטל",
+};
+const BLANK_FORM = { user: null as { id: string; full_name: string } | null, weekday: 0, starts: "", ends: "" };
+
+function TemporaryAppointments({ weekday }: { weekday: number }) {
+  const list = useLoad(() => api.get<TempAppointment[]>(`/api/day-appointments/temporary?weekday=${weekday}`), [weekday]);
+  const [form, setForm] = useState({ ...BLANK_FORM, weekday });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  function reset() { setForm({ ...BLANK_FORM, weekday }); setEditingId(null); }
+  async function save() {
+    setErr(null); setNotice(null);
+    try {
+      if (editingId) {
+        await api.put(`/api/day-appointments/temporary/${editingId}`, { weekday: form.weekday, starts: form.starts, ends: form.ends });
+        setNotice("המינוי עודכן");
+      } else {
+        if (!form.user) { setErr("יש לבחור מתנדב/ת"); return; }
+        await api.post("/api/day-appointments/temporary", { user_id: form.user.id, weekday: form.weekday, starts: form.starts, ends: form.ends });
+        setNotice("המינוי נשמר");
+      }
+      reset();
+      list.reload();
+    } catch (e) { setErr(errorText(e)); }
+  }
+  function startEdit(a: TempAppointment) {
+    setEditingId(a.id);
+    setForm({ user: { id: a.user_id, full_name: a.full_name }, weekday: a.weekday, starts: a.starts, ends: a.ends });
+  }
+  async function revoke(id: string) {
+    setErr(null); setNotice(null);
+    try {
+      await api.post(`/api/day-appointments/temporary/${id}/revoke`, { confirm: true });
+      setConfirmId(null);
+      setNotice("המינוי בוטל. הגישה לניהול היום נסגרה מיד");
+      list.reload();
+    } catch (e) { setErr(errorText(e)); }
+  }
+
+  return (
+    <section className="card stack" aria-labelledby="temp-title">
+      <strong id="temp-title">אחראי/ת זמני/ת</strong>
+      <span className="muted">מינוי זמני מאפשר לחונך/ת לנהל יום אחר לפרק זמן מוגדר, בלי לשנות את הרשאותיו/ה הקבועות. שעות לפי שעון ישראל.</span>
+      {err && <div className="error" role="alert">{err}</div>}
+      {notice && <div className="saved" role="status">{notice}</div>}
+
+      {(list.data ?? []).map((a) => (
+        <div key={a.id} className="person" style={{ flexWrap: "wrap" }}>
+          <span className="name">{a.full_name}</span>
+          <span className="badge">{STATUS_TEXT[a.status]}</span>
+          <span className="muted">יום {a.weekday_name}</span>
+          <span className="time-range" dir="ltr">{a.starts.replace("T", " ")} – {a.ends.replace("T", " ")}</span>
+          <span className="muted">נוצר על ידי {a.created_by}{a.updated_by ? ` · עודכן על ידי ${a.updated_by}` : ""}{a.revoked_by ? ` · בוטל על ידי ${a.revoked_by}` : ""}</span>
+          {(a.status === "scheduled" || a.status === "active") && (
+            <span className="row">
+              <button type="button" className="btn small ghost" onClick={() => startEdit(a)}>עריכה</button>
+              {confirmId === a.id ? (
+                <>
+                  <button type="button" className="btn small primary" onClick={() => revoke(a.id)}>אישור ביטול</button>
+                  <button type="button" className="btn small ghost" onClick={() => setConfirmId(null)}>חזרה</button>
+                </>
+              ) : (
+                <button type="button" className="btn small ghost" onClick={() => setConfirmId(a.id)}>ביטול מינוי</button>
+              )}
+            </span>
+          )}
+        </div>
+      ))}
+      {list.data && list.data.length === 0 && <span className="muted">אין מינויים זמניים.</span>}
+
+      <div className="stack">
+        <strong>{editingId ? "עריכת מינוי" : "מינוי חדש"}</strong>
+        {!editingId && <PersonPicker label="מתנדב/ת (חונך/ת פעיל/ה בלבד)" onPick={(u) => setForm({ ...form, user: { id: u.id, full_name: u.full_name } })} />}
+        {form.user && <span className="muted">נבחר/ה: {form.user.full_name}</span>}
+        <span className="muted">יום לניהול: {weekday === 6 ? "שבת" : `יום ${WEEKDAYS[weekday]}`}</span>
+        <label className="field">
+          התחלה (שעון ישראל)
+          <input type="datetime-local" dir="ltr" value={form.starts} onChange={(e) => setForm({ ...form, starts: e.target.value })} />
+        </label>
+        <label className="field">
+          סיום (שעון ישראל)
+          <input type="datetime-local" dir="ltr" value={form.ends} onChange={(e) => setForm({ ...form, ends: e.target.value })} />
+        </label>
+        <div className="row">
+          <button type="button" className="btn primary small" disabled={!form.starts || !form.ends || (!editingId && !form.user)} onClick={save}>
+            {editingId ? "שמירת שינויים" : "שמירת מינוי זמני"}
+          </button>
+          {editingId && <button type="button" className="btn small ghost" onClick={reset}>ביטול עריכה</button>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Day Manager appointments for ONE weekday (decision of 2026-10-17). Reached from the selected day's volunteer list,
+// so the weekday comes from the address and is never chosen again here. Permanent replacement and temporary
+// appointments keep their rules; the backend enforces the same weekday scope.
 export function YouthManager() {
+  const [params] = useSearchParams();
+  const wdParam = params.get("weekday");
+  const weekday = wdParam !== null && /^[0-6]$/.test(wdParam) ? Number(wdParam) : null;
   const mgrs = useLoad(() => api.get<{ weekday: number; weekday_name: string; managers: { id: string; full_name: string }[] }[]>("/api/day-managers"));
   const [err, setErr] = useState<string | null>(null);
-  async function save(weekday: number, ids: string[]) {
+  if (weekday === null) return <Navigate to="/manage" replace />;
+  async function save(wd: number, ids: string[]) {
     try {
-      await api.put(`/api/day-managers/${weekday}`, { user_ids: ids });
+      await api.put(`/api/day-managers/${wd}`, { user_ids: ids });
       setErr(null);
       mgrs.reload();
     } catch (e) { setErr(errorText(e)); }
   }
+  const dayName = weekday === 6 ? "שבת" : `יום ${WEEKDAYS[weekday]}`;
+  const day = mgrs.data?.find((d) => d.weekday === weekday);
   return (
-    <Shell title="אחראי נוער">
-      <Link className="btn" to="/manage/trainees">התקדמות חניכים (מספר נסיעות ותאריך אחרון)</Link>
-      <div className="muted">מינוי, החלפה והסרה של אחראי יום. אחראי יום חייב להיות חונך. צפייה בסידורים מפורסמים דרך לשונית "סידורים".</div>
+    <Shell title={`${dayName} · אחראי יום`} back={`/manage/day/${weekday}/volunteers`}>
+      <h2>{dayName}</h2>
+      <div className="muted">מינוי, החלפה והסרה של אחראי יום. אחראי יום חייב להיות חונך. ליום הזה יש אחראי קבוע אחד בלבד.</div>
       {err && <div className="error">{err}</div>}
-      {mgrs.data?.map((d) => (
-        <div key={d.weekday} className="card stack">
-          <h3>יום {d.weekday_name}</h3>
-          {d.managers.length === 0 && <span className="muted">אין אחראי</span>}
-          {d.managers.map((m) => (
+      {!mgrs.data && <Loading error={mgrs.error} />}
+      {day && (
+        <div className="card stack">
+          <strong>אחראי/ת קבוע/ה</strong>
+          {day.managers.length === 0 && <span className="muted">אין אחראי קבוע ליום הזה</span>}
+          {day.managers.map((m) => (
             <div key={m.id} className="person">
               <span className="name">{m.full_name}</span>
-              <button className="btn small ghost" onClick={() => save(d.weekday, d.managers.filter((x) => x.id !== m.id).map((x) => x.id))}>הסרה</button>
+              <span className="badge">אחראי/ת קבוע/ה</span>
+              <button className="btn small ghost" onClick={() => save(weekday, [])}>הסרה</button>
             </div>
           ))}
-          <PersonPicker label="הוספת אחראי" onPick={(u) => save(d.weekday, [...d.managers.map((x) => x.id), u.id])} />
+          <PersonPicker
+            label={day.managers.length === 0 ? "מינוי אחראי קבוע" : "החלפת אחראי קבוע (הנוכחי יוסר)"}
+            onPick={(u) => save(weekday, [u.id])}
+          />
         </div>
-      ))}
+      )}
+      <TemporaryAppointments weekday={weekday} />
     </Shell>
   );
 }

@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.core.db import session_factory
 from app.core.timeutil import SATURDAY, local_dt, local_midnight_after, local_today, local_weekday
 from app.days.models import ActivityDay
+from app.scheduling.retention import purge_expired
 from app.notifications.models import OutboxMessage
 from app.notifications.outbox import day_manager_ids, enqueue
 from app.registration.models import Invitation
@@ -106,6 +107,7 @@ def enqueue_journal_reminders(db: Session, now: datetime) -> int:
     from app.days.models import Shift
     from app.mentoring.service import completeness
     from app.scheduling.models import Assignment
+    from app.scheduling.liveness import live_assignment
 
     n = 0
     today = local_today(now)
@@ -124,7 +126,7 @@ def enqueue_journal_reminders(db: Session, now: datetime) -> int:
                               .join(VolunteerLevel, (VolunteerLevel.user_id == Assignment.user_id)
                                     & VolunteerLevel.valid_to.is_(None) & (VolunteerLevel.level == "trainee"))
                               .where(Assignment.version_id == day.latest_published_version_id,
-                                     Assignment.shift_id == shift.id)).all()
+                                     Assignment.shift_id == shift.id, live_assignment())).all()
         base = {"date": day.local_date.isoformat(), "shift": shift.kind, "shift_id": str(shift.id)}
         for trainee_id in trainees:
             comp = completeness(db, trainee_id, shift)
@@ -173,7 +175,9 @@ def run_once(now: datetime | None = None) -> dict:
     with session_factory()() as db:
         created = enqueue_due_reminders(db, now)
         stats = deliver_batch(db, now)
-    return {"reminders_created": created, **stats}
+    with session_factory()() as db:
+        purged = purge_expired(db, now)  # schedule retention: two months after a date's last shift
+    return {"reminders_created": created, "schedule_versions_purged": purged["versions"], **stats}
 
 
 def main() -> None:

@@ -13,5 +13,7 @@ export default defineConfig({
   preview: {
     port: 4173,
     proxy: { "/api": { target: process.env.MDA_API_URL ?? "http://127.0.0.1:8000", changeOrigin: false } },
+    // Temporary HTTPS tunnel only: the one tunnel hostname is allowed (never a wildcard). Unset = default behaviour.
+    allowedHosts: process.env.MDA_PREVIEW_HOST ? [process.env.MDA_PREVIEW_HOST] : undefined,
   },
 });

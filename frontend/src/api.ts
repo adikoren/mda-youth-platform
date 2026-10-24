@@ -76,6 +76,8 @@ export interface Me {
   is_admin: boolean;
   is_youth_manager: boolean;
   managed_weekdays: number[];
+  /** Temporary Day Manager appointments valid right now (also included in managed_weekdays). */
+  temporary_days?: { weekday: number; ends_at: string }[];
   /** Client-only: restored from this device because the server is unreachable. Grants nothing. */
   offline?: boolean;
 }

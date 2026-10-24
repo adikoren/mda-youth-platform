@@ -65,6 +65,7 @@ def actor_out(actor: Actor, user: User | None = None) -> dict:
         "is_admin": actor.is_admin,
         "is_youth_manager": actor.is_youth_manager,
         "managed_weekdays": sorted(actor.managed_weekdays),
+        "temporary_days": [{"weekday": wd, "ends_at": ends.isoformat()} for wd, ends in sorted(actor.temporary_weekdays.items())],
     }
 
 

@@ -68,9 +68,9 @@ def test_republication_notifies_assigned_and_waiting_of_the_affected_shift(world
     assert msgs[U["thu_youth"].id].event_type == "schedule_changed"
     assert msgs[U["thu_trainee"].id].event_type == "schedule_changed_waiting"
     assert msgs[added.id].event_type == "schedule_changed_waiting"
-    # Reinforcement was not affected by this publication, so the trainee (who is also in the
-    # reinforcement pool through evening availability) is told about the evening only.
-    assert changes(msgs[U["thu_trainee"].id]) == {("evening", "waiting")}
+    # Decision 2026-10-16: every waiting volunteer of the date hears about the republished schedule, including
+    # for shifts this publication did not touch, so the trainee hears about both the evening and reinforcement.
+    assert changes(msgs[U["thu_trainee"].id]) == {("evening", "waiting"), ("reinforcement", "waiting")}
     # Not in the pool (never registered / withdrew / other day): nothing.
     assert set(msgs) == {U["thu_mentor"].id, U["thu_youth"].id, U["thu_trainee"].id, added.id}
     assert second["notifications_queued"] == 4

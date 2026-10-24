@@ -52,7 +52,7 @@ def get_actor(request: Request, db: Session = Depends(get_db), now: datetime = D
     sess = current_session(request, db, now)
     if sess is None:
         raise AppError(401, "not_authenticated", "יש להתחבר")
-    actor = load_actor(db, sess.user_id)
+    actor = load_actor(db, sess.user_id, now)
     if actor is None or actor.status == "inactive":
         raise AppError(401, "not_authenticated", "יש להתחבר")
     is_background = request.headers.get(BACKGROUND_HEADER) == "1"

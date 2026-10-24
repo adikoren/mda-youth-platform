@@ -2,24 +2,18 @@
 reveal more than the matching single-object policy in app.access.policies."""
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, DateTime, and_, cast, exists, extract, false, func, literal, or_, select, true
-
-from app.core.config import get_settings
+from sqlalchemy import ColumnElement, and_, exists, extract, false, or_, true
 
 from app.access.context import Actor
 from app.core.timeutil import SATURDAY
 from app.days.models import ActivityDay
 from app.registration.models import Invitation
-from app.scheduling.models import Assignment
+from app.scheduling.liveness import live_boarding
+from app.scheduling.models import Assignment, BoardingEntry
 
 
 def _weekday_col():
     return extract("dow", ActivityDay.local_date)
-
-
-def _local_midnight_after_col():
-    # (date + 1) at local midnight, converted by PostgreSQL using the tz database (DST-safe).
-    return func.timezone(literal(get_settings().timezone), cast(ActivityDay.local_date + 1, DateTime()))
 
 
 def published_schedule_visible(actor: Actor, now: datetime) -> ColumnElement[bool]:
@@ -33,14 +27,17 @@ def published_schedule_visible(actor: Actor, now: datetime) -> ColumnElement[boo
         clauses.append(_weekday_col().in_(sorted(actor.managed_weekdays)))
     if actor.home_weekday is not None:
         clauses.append(_weekday_col() == actor.home_weekday)
-    guest = and_(
-        literal(now) < _local_midnight_after_col(),
-        exists().where(
-            Assignment.version_id == ActivityDay.latest_published_version_id,
-            Assignment.user_id == actor.user_id,
-        ),
-    )
-    clauses.append(guest)
+    # A recorded published assignment to THIS date keeps access to that date's schedule (also in history),
+    # with no time limit. Other dates on the same weekday are not granted. Retention ends it (see D-64).
+    clauses.append(exists().where(
+        Assignment.version_id == ActivityDay.latest_published_version_id,
+        Assignment.user_id == actor.user_id,
+    ))
+    clauses.append(exists().where(  # a trainee on the published boarding order (scheduled participation)
+        BoardingEntry.version_id == ActivityDay.latest_published_version_id,
+        BoardingEntry.user_id == actor.user_id,
+        live_boarding(BoardingEntry),
+    ))
     return and_(published, or_(*clauses))
 
 
@@ -59,8 +56,13 @@ def registration_readable_days(actor: Actor) -> ColumnElement[bool]:
 
 
 def registerable_days(actor: Actor, now: datetime) -> ColumnElement[bool]:
-    """Dates the actor may answer availability for (eligibility only, not timing)."""
-    if not actor.is_active or actor.level is None:
+    """Dates shown in the registration list for the actor. Admin: every date (listing only; answering still needs
+    a volunteer level, see policies.can_register_for_day). Others: eligibility only, not timing."""
+    if not actor.is_active:
+        return false()
+    if actor.is_admin:  # admin override: listing is not limited by level, home day or invitations
+        return true()
+    if actor.level is None:
         return false()
     clauses = [_weekday_col() == SATURDAY]
     if actor.home_weekday is not None:

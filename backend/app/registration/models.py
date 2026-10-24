@@ -39,6 +39,10 @@ class RegistrationChoice(Base):
     is_late: Mapped[bool] = mapped_column(Boolean, default=False)  # last change made at/after closing
     first_answered_at: Mapped[datetime] = tstz()
     updated_at: Mapped[datetime] = tstz()
+    # Explicit cancellation by the volunteer. `available` keeps the answer the volunteer gave, so "cancelled"
+    # is never confused with "not available" or "no answer". Cancelled choices are not eligible candidates.
+    cancelled_at: Mapped[datetime | None] = tstz(nullable=True)
+    cancelled_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
 
 class ManagerAddedParticipant(Base):
@@ -117,3 +121,27 @@ class AvailabilityAttention(Base):
     resolved_at: Mapped[datetime | None] = tstz(nullable=True)
     resolved_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     resolution: Mapped[str | None] = mapped_column(String(32))
+
+
+# pending until the Day Manager decides. "resolved" is the legacy "handled" from before decisions existed.
+REQUEST_STATUSES = ("pending", "approved", "rejected", "resolved")
+
+
+class RegistrationRequest(Base):
+    """A volunteer's written request to the day manager after registration closed (the 'שליחת בקשה
+    לאחראי' form). Submitted only by an explicit button press; never created by opening the tab.
+    The text stays here; notification payloads carry ids only (DECISIONS D-26)."""
+
+    __tablename__ = "registration_requests"
+    __table_args__ = (CheckConstraint(check_in("status", REQUEST_STATUSES), name="status"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()  # client-generated, so a retried submit is recognised
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    activity_day_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("activity_days.id"), index=True)
+    # The shift the request is about. Null only for requests made before per-shift requests existed.
+    shift_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("shifts.id"), index=True)
+    message: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = tstz()
+    resolved_at: Mapped[datetime | None] = tstz(nullable=True)
+    resolved_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))

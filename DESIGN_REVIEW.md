@@ -18,7 +18,7 @@ Deferred: MICU, community security duties, attendance tracking, automatic crew r
 
 ### Registration and availability
 
-- Weekday ordinary self-registration is evening availability, yes/no with optional late-arrival selection. No early-leave field or ambulance selection. Reinforcement is manager-assigned from eligible trainee availability, not an independent signup option.
+- Weekday ordinary self-registration is evening availability, yes/no with optional late-arrival selection. No early-leave field or ambulance selection. Reinforcement is manager-assigned from evening registrants by default. Superseded 2026-10-17: a manager may explicitly open reinforcement registration during setup (volunteers may select it alongside other open options, no trainee-only rule); adding reinforcement during preparation opens no window; after publication no new registration or joining is opened. Opening a shift and opening registration are separate operations.
 - Friday, Saturday, holiday and holiday eve: morning and evening buttons, multiple selection, full shifts only. A person may select both. No late-arrival field for these shifts. No reinforcement.
 - Availability belongs to the user and individual selectable shift. Assigning evening never clears morning availability. Waiting is calculated separately per shift, including manager-added participants.
 - Saturday is open to all active station volunteers without personal invitation. All active volunteers can view the published Saturday schedule, assigned or not. Saturday is an exception to ordinary cross-day access.

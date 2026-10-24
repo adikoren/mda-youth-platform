@@ -6,9 +6,9 @@
   --line: #e2e5ec;
   --bg: #f4f5f8;
   --card: #ffffff;
-  --ok: #16794a;
-  --warn-bg: #fff4d6;
-  --warn-ink: #7a5300;
+  --ok: #9e0c24;  /* success states use the deep red accent (no green outside the WhatsApp logo) */
+  --warn-bg: #f1f2f5;  /* notices are neutral, not yellow */
+  --warn-ink: #3a4252;
   --alert-bg: #fde7ea;
   --radius: 12px;
   font-family: "Rubik", "Assistant", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
@@ -66,12 +66,11 @@ a { color: var(--red-dark); }
 .badge {
   display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 999px; background: #eef0f5; color: var(--muted);
 }
-.badge.trainee { background: #e6f0ff; color: #1d4ea0; }
-.badge.youth { background: #e8f6ee; color: #1a6b42; }
-.badge.mentor { background: #f2eafd; color: #5b2ea6; }
+/* Roles are told apart by their text and icon, not by accent colour. */
+.badge.trainee, .badge.youth, .badge.mentor { background: #fff; color: var(--ink-2); border: 1px solid var(--line); }
 .badge.guest { background: var(--warn-bg); color: var(--warn-ink); }
 .badge.red { background: var(--red); color: #fff; }
-.badge.late { background: #ffe1c2; color: #8a4300; }
+.badge.late { background: var(--alert-bg); color: var(--red-dark); }
 
 .person { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
 .person:first-of-type { border-top: 0; }
@@ -236,9 +235,76 @@ body { line-height: 1.45; }
 .seg.yes[aria-pressed="true"] { background: var(--red-600); border-color: var(--red-600); color: #fff; }
 .seg.no[aria-pressed="true"] { background: var(--ink-2); border-color: var(--ink-2); color: #fff; }
 .seg:focus-visible, .btn:focus-visible, .reg-row:focus-visible, .assign-card:focus-visible, .action-card:focus-visible {
-  outline: 3px solid #1d4ea0; outline-offset: 2px;
+  outline: 3px solid var(--red-600); outline-offset: 2px;
 }
 .shift-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 4px; }
 .shift-foot:empty { display: none; }
 .saved { color: var(--ok); font-weight: 700; font-size: .88rem; }
 a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+
+/* Registration rows: status and call to action sit together on the right, wrapping on narrow screens. */
+.reg-row { gap: 12px; }
+.reg-end { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.reg-row .btn.small { min-height: 40px; }
+
+
+/* ---- layout helpers added with the shift setup, profile and navigation changes ---- */
+/* Back: a visible text button in the red top bar, with a keyboard focus ring. */
+.back-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 12px; border-radius: 10px;
+  border: 1.5px solid #fff; background: transparent; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.back-btn:focus-visible, .wa-link:focus-visible, .person-link:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+/* Time ranges stay left-to-right inside Hebrew text. */
+.time-range { display: inline-block; unicode-bidi: isolate; direction: ltr; white-space: nowrap; }
+/* Names that open a profile look like names, with a visible focus ring. */
+.person-link { color: var(--ink); text-decoration: none; font-weight: 600; }
+.person-link:hover { text-decoration: underline; color: var(--red-700); }
+/* WhatsApp logo: the one green in the app. Touch target 44px. */
+.wa-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 12px; }
+.wa-link:hover { background: #f1f2f5; }
+/* A shift with no assignments yet: one line, not an empty card. */
+.compact-empty { font-size: .9rem; }
+
+/* ---- crew, operators and boarding order ---- */
+/* Operating volunteer: a separate line under the ambulance name, not a role badge. */
+.operator-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: .92rem; padding: 4px 0; }
+/* Unfilled trainee position on a populated ambulance: dashed, neutral. */
+.empty-position { border: 1px dashed var(--line); border-radius: 10px; padding: 6px 10px; }
+.boarding-list { margin: 0; padding-inline-start: 1.4rem; display: grid; gap: 6px; }
+.operator-form summary { cursor: pointer; color: var(--ink-2); font-size: .9rem; min-height: 40px; display: flex; align-items: center; }
+.operator-form input[type="time"] { min-height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; }
+
+/* ---- manager date list: compact accordion rows ---- */
+.day-list { display: grid; gap: 6px; margin-top: 8px; }
+.day-row { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.day-row-head { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 12px;
+  background: #fff; border: 0; color: var(--ink); font: inherit; text-align: start; cursor: pointer; }
+.day-row-head:focus-visible { outline: 3px solid var(--red-600); outline-offset: -3px; }
+.day-row-title { flex: 1 1 auto; font-size: .95rem; }
+.day-row-status { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.day-row-chev { color: var(--muted); flex: none; }
+.day-row-panel { display: grid; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid var(--line-2); font-size: .9rem; }
+.day-row-panel .btn { justify-self: start; }
+.history-toggle { border: 1px solid var(--line); border-radius: 10px; }
+.badge.pub { background: var(--red-050); color: var(--red-700); border-color: var(--red-100); }
+
+/* ---- management hub ---- */
+.hub-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.hub-card { display: grid; gap: 4px; align-content: start; min-height: 96px; padding: 14px; text-align: start;
+  background: #fff; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
+.hub-card strong { color: var(--red-700); font-size: 1rem; }
+.hub-card:focus-visible { outline: 3px solid var(--red-600); outline-offset: 2px; }
+.hub-card:disabled { cursor: default; color: var(--muted); background: #f7f8fa; }
+.hub-card:disabled strong { color: var(--muted); }
+
+/* ---- youth manager area ---- */
+.youth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.youth-grid .hub-card.wide { grid-column: 1 / -1; }
+.hub-card.wide { grid-column: 1 / -1; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.chip { min-height: 40px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--red-600); border-color: var(--red-600); color: #fff; font-weight: 600; }
+.chip:focus-visible { outline: 3px solid var(--red-600); outline-offset: 2px; }
+
+/* Registration countdown: the clock is LTR text inside the Hebrew RTL sentence. */
+.countdown { color: var(--muted, inherit); font-weight: 600; }
+.countdown-clock { direction: ltr; unicode-bidi: isolate; display: inline-block; font-variant-numeric: tabular-nums; }

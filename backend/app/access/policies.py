@@ -4,14 +4,16 @@
 Convention: if the actor may not know a resource exists -> 404; if they can see it but may not
 perform the action -> 403. Admin is an audited override of scopes, privacy and time windows, but
 never of scheduling invariants (those are enforced in services and the database)."""
+
+import uuid
 from datetime import datetime
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
 from app.core.errors import forbidden, not_found
-from app.core.timeutil import SATURDAY, local_midnight_after, local_weekday
+from app.core.timeutil import SATURDAY, local_weekday
 from app.days.models import ActivityDay
 from app.registration.models import Invitation
 from app.scheduling.models import Assignment
@@ -27,6 +29,14 @@ def require_active(actor: Actor) -> None:
 def can_approve_signups(actor: Actor) -> bool:
     # Initial rollout: admin only. Delegation per scope is a later, explicit change.
     return actor.is_admin
+
+
+def can_approve_for_weekday(actor: Actor, weekday: int | None) -> bool:
+    """Signup approval scope: Admin any day; a Day Manager (permanent or active temporary appointment) only the
+    weekday they manage right now. Never grants a role, and a requested weekday grants no access by itself."""
+    if not actor.is_active or weekday is None:
+        return False
+    return actor.is_admin or weekday in actor.managed_weekdays
 
 
 def can_appoint_day_managers(actor: Actor) -> bool:
@@ -62,6 +72,9 @@ def can_read_day_registrations(actor: Actor, day: ActivityDay) -> bool:
 
 
 def is_published_assignee(db: Session, actor: Actor, day: ActivityDay) -> bool:
+    """Recorded published assignment to this date, or a place on its published boarding order."""
+    from app.scheduling.liveness import live_boarding
+    from app.scheduling.models import BoardingEntry
     if day.latest_published_version_id is None:
         return False
     return bool(
@@ -72,14 +85,16 @@ def is_published_assignee(db: Session, actor: Actor, day: ActivityDay) -> bool:
                     Assignment.user_id == actor.user_id,
                 )
             )
+        ) or db.scalar(
+            select(
+                exists().where(
+                    BoardingEntry.version_id == day.latest_published_version_id,
+                    BoardingEntry.user_id == actor.user_id,
+                    live_boarding(BoardingEntry),
+                )
+            )
         )
     )
-
-
-def guest_access_end(day: ActivityDay) -> datetime:
-    """Ordinary guests see the full date schedule through 23:59 of the date: the exclusive end is
-    the next local midnight (not the 23:00 shift end)."""
-    return local_midnight_after(day.local_date)
 
 
 def can_view_published_schedule(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
@@ -92,7 +107,27 @@ def can_view_published_schedule(db: Session, actor: Actor, day: ActivityDay, now
         return True  # Saturday published schedules: all active volunteers
     if actor.home_weekday == weekday:
         return True  # current home-day members: permanent
-    return now < guest_access_end(day) and is_published_assignee(db, actor, day)
+    # Assigned to this date (recorded assignment): access does not expire with a time window.
+    return is_published_assignee(db, actor, day)
+
+
+def can_view_profile(db: Session, actor: Actor, user_id: uuid.UUID) -> bool:
+    """Personal profile (name, level, home day, contact). Self, Admin and Youth Manager always; a Day Manager
+    only for people registered or assigned on a date they manage. Anyone else gets not-found."""
+    from app.registration.models import Registration
+    from app.scheduling.models import Assignment
+    from sqlalchemy import extract
+    if not actor.is_active:
+        return False
+    if actor.user_id == user_id or actor.is_admin or actor.is_youth_manager:
+        return True
+    if not actor.managed_weekdays:
+        return False
+    dow = extract("dow", ActivityDay.local_date).in_(sorted(actor.managed_weekdays))
+    on_registration = exists().where(Registration.user_id == user_id, Registration.activity_day_id == ActivityDay.id)
+    on_schedule = exists().where(Assignment.version_id == ActivityDay.latest_published_version_id,
+                                 Assignment.user_id == user_id)
+    return db.scalar(select(ActivityDay.id).where(dow, or_(on_registration, on_schedule)).limit(1)) is not None
 
 
 def has_open_invitation(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
@@ -110,11 +145,33 @@ def has_open_invitation(db: Session, actor: Actor, day: ActivityDay, now: dateti
     )
 
 
+def can_see_open_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
+    """Whether a date appears in the registration list. Admin sees every date, regardless of home day, invitations,
+    assignments or volunteer level. Listing never registers anyone: answering still needs can_register_for_day."""
+    if not actor.is_active:
+        return False
+    if actor.is_admin:
+        return True
+    return can_register_for_day(db, actor, day, now)
+
+
 def can_register_for_day(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> bool:
-    """Who may give availability for a date (timing is checked separately)."""
+    """Who may give availability for a date (timing is checked separately).
+
+    Admin override (authorization): an admin may answer for any date, without a home day, an
+    invitation or a shift. A volunteer level is still required (a data rule: availability feeds the
+    shift pools, which only contain volunteers)."""
     if not actor.is_active or actor.level is None:
         return False
+    if actor.is_admin:
+        return True
     weekday = local_weekday(day.local_date)
     if weekday == SATURDAY or actor.home_weekday == weekday:
         return True
     return has_open_invitation(db, actor, day, now)
+
+
+def can_view_day_volunteers(actor: Actor) -> bool:
+    """The selected-day volunteer list under "אחראי נוער": Youth Manager and Admin only. A Day Manager does not
+    get it merely by managing a day."""
+    return actor.is_active and (actor.is_admin or actor.is_youth_manager)

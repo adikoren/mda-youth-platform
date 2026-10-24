@@ -118,12 +118,41 @@ def cmd_seed_demo(args) -> None:
             db.add(User(email="pending@example.test", full_name="משתמש ממתין", password_hash=pw_hash,
                         status="pending", requested_weekday=4, created_at=now))
         today = local_today(now)
-        days.generate_days(db, today - timedelta(days=3), today + timedelta(days=args.days), now)
+        # Demo data shows full days (every shift type the day kind allows); real dates default to evening only.
+        days.generate_days(db, today - timedelta(days=3), today + timedelta(days=args.days), now, shift_kinds=None)
         db.commit()
     print("demo personas ready (synthetic data only)")
     print("emails: admin@example.test, youth.manager@example.test, <day>.manager|mentor|youth|trainee1..3@example.test")
     print("        day = sun mon tue wed thu fri; Saturday managed by fri.mentor; pending@example.test")
     print(f"demo password (shown once, not stored anywhere): {password}")
+
+
+def cmd_seed_dataset(args) -> None:
+    """Adds synthetic volunteers, days, registrations and rides. Existing rows are never changed."""
+    from app.demo import dataset
+    now = get_clock().now()
+    password = os.environ.get("MDA_DEMO_PASSWORD") or secrets.token_urlsafe(9)
+    with session_factory()() as db:
+        counts = dataset.seed(db, now, password=password)
+        summary = dataset.report(db)
+        problems = dataset.publication_audit(db, now)
+    print("dataset added:", counts)
+    print("dataset totals (demo rows only):", summary)
+    if problems:
+        print("WARNING: published while registration is still open:", problems)
+    else:
+        print("publication audit: consistent (no published date with an open registration window)")
+    if counts["users"]:
+        print(f"demo volunteer password (new accounts only, shown once): {password}")
+        print("emails: demo.v001@example.test ... demo.v240@example.test (last six pending)")
+
+
+def cmd_clean_dataset(_args) -> None:
+    """Removes only rows recorded in the demo manifest, dependents first."""
+    from app.demo import dataset
+    with session_factory()() as db:
+        removed = dataset.clean(db)
+    print("removed:", removed)
 
 
 def cmd_report_capacity(_args) -> None:
@@ -140,6 +169,26 @@ def cmd_report_capacity(_args) -> None:
               f"version {r['revision']} ({r['version_status']})")
 
 
+def cmd_generate_vapid(args) -> None:
+    """Creates the Web Push (VAPID) key pair once. The private key is written to the given path with owner-only
+    permissions and never overwritten; the public key is printed for MDA_VAPID_PUBLIC_KEY."""
+    import base64
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    path = os.path.expanduser(args.private_key)
+    if os.path.exists(path):
+        sys.exit(f"a private key already exists at {path}; it is never overwritten")
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption())
+    point = key.public_key().public_bytes(serialization.Encoding.X962,
+                                          serialization.PublicFormat.UncompressedPoint)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(pem)
+    print(base64.urlsafe_b64encode(point).decode().rstrip("="))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -152,9 +201,14 @@ def main() -> None:
     g.add_argument("--start", required=True)
     g.add_argument("--end", required=True)
     g.set_defaults(fn=cmd_generate_days)
+    v = sub.add_parser("generate-vapid", help="create the Web Push key pair once (prints the public key)")
+    v.add_argument("--private-key", required=True)
+    v.set_defaults(fn=cmd_generate_vapid)
     s = sub.add_parser("seed-demo")
     s.add_argument("--days", type=int, default=21)
     s.set_defaults(fn=cmd_seed_demo)
+    sub.add_parser("seed-dataset", help="add synthetic volunteers, days, registrations and rides").set_defaults(fn=cmd_seed_dataset)
+    sub.add_parser("clean-dataset", help="remove only rows created by seed-dataset").set_defaults(fn=cmd_clean_dataset)
     sub.add_parser("report-capacity").set_defaults(fn=cmd_report_capacity)
     args = p.parse_args()
     args.fn(args)

@@ -6,7 +6,7 @@ cross-slot rules (same person twice in a shift, trainee reinforcement+evening) a
 a stable state. The unique constraint uq_assignment_person_shift is the database safety net.
 Capacity is informational only (soft warning)."""
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -27,7 +27,8 @@ from app.registration.models import (
     ManagerAddedParticipant,
     QueueOrder,
 )
-from app.scheduling.models import AmbulanceSlot, Assignment, ScheduleVersion
+from app.scheduling.models import AmbulanceSlot, Assignment, BoardingEntry, ScheduleVersion
+from app.scheduling.liveness import live_assignment, live_boarding
 from app.scheduling.pool import assigned_by_shift, shift_pools
 
 DEFAULT_CAPACITY = 3
@@ -104,13 +105,23 @@ def _ensure_draft_locked(db: Session, day: ActivityDay, actor_id: uuid.UUID | No
         slot_map: dict[uuid.UUID, uuid.UUID] = {}
         for s in db.scalars(select(AmbulanceSlot).where(AmbulanceSlot.version_id == base_id)):
             new = AmbulanceSlot(id=uuid.uuid4(), version_id=draft.id, shift_id=s.shift_id, slot_key=s.slot_key,
-                                ordinal=s.ordinal, capacity=s.capacity, status=s.status)
+                                ordinal=s.ordinal, capacity=s.capacity, status=s.status,
+                                operator_user_id=s.operator_user_id, operator_start=s.operator_start,
+                                operator_end=s.operator_end)
             slot_map[s.id] = new.id
             db.add(new)
         db.flush()
-        for a in db.scalars(select(Assignment).where(Assignment.version_id == base_id)):
+        # A volunteer who cancelled on the base version is not carried into the new working copy.
+        for a in db.scalars(select(Assignment).where(Assignment.version_id == base_id, live_assignment())):
             db.add(Assignment(version_id=draft.id, shift_id=a.shift_id, slot_id=slot_map[a.slot_id],
                               user_id=a.user_id, created_at=a.created_at, created_by_id=a.created_by_id))
+        # A shift type added after the last publication has no ambulances in the base: give it its baseline here.
+        for b in db.scalars(select(BoardingEntry).where(BoardingEntry.version_id == base_id, live_boarding(BoardingEntry))):
+            db.add(BoardingEntry(version_id=draft.id, shift_id=b.shift_id, user_id=b.user_id, position=b.position))
+        in_base = {s.shift_id for s in db.scalars(select(AmbulanceSlot).where(AmbulanceSlot.version_id == base_id))}
+        for shift in day_shifts(db, day.id):
+            if shift.id not in in_base:
+                _add_baseline_slots(db, draft.id, shift)
     db.flush()
     return draft
 
@@ -399,15 +410,18 @@ def set_order(db: Session, actor: Actor, shift_id: uuid.UUID, user_ids: list[uui
 
 
 def set_morning_registration(db: Session, actor: Actor, shift_id: uuid.UUID, open_: bool, now: datetime) -> bool:
-    """Explicitly open (or close) self-registration for a Sunday–Friday morning shift. Saturday morning
-    is always open. Closing hides the shift from registration screens; answers already given are kept
-    (they stay in the manager's pool) and assignments/history are untouched."""
+    """Explicitly open (or close) self-registration for a Sunday–Friday morning or reinforcement shift (decision of
+    2026-10-17: reinforcement uses the same switch). Saturday morning is always open. Closing hides the shift from
+    registration screens; answers already given are kept (they stay in the manager's pool) and assignments and
+    history are untouched."""
     shift = _shift(db, shift_id)
     day = lock_day(db, shift.activity_day_id)
     require_manage_day(actor, day)
-    if shift.kind != "morning":
-        raise bad_request("not_morning", "אפשר לפתוח או לסגור להרשמה רק משמרת בוקר")
-    if local_weekday(day.local_date) == SATURDAY:
+    if shift.kind not in ("morning", "reinforcement"):
+        raise bad_request("not_toggleable", "אפשר לפתוח או לסגור להרשמה רק משמרת בוקר או תגבור")
+    if open_ and shift.kind == "reinforcement" and day.latest_published_version_id is not None:
+        raise conflict("schedule_published", "אחרי פרסום הסידור אי אפשר לפתוח הרשמה חדשה לתגבור")
+    if shift.kind == "morning" and local_weekday(day.local_date) == SATURDAY:
         raise conflict("saturday_fixed", "משמרת בוקר בשבת פתוחה תמיד להרשמה")
     if now >= local_midnight_after(day.local_date):
         raise conflict("day_ended", "התאריך כבר עבר")
@@ -416,8 +430,10 @@ def set_morning_registration(db: Session, actor: Actor, shift_id: uuid.UUID, ope
         return False
     shift.self_selectable = open_
     day.row_version += 1
-    record(db, actor_id=actor.user_id, action="morning_registration_open" if open_ else "morning_registration_close",
-           object_type="shift", object_id=shift.id, now=now, meta={"date": day.local_date.isoformat()})
+    record(db, actor_id=actor.user_id,
+           action=f"{shift.kind}_registration_open" if open_ else f"{shift.kind}_registration_close",
+           object_type="shift", object_id=shift.id, now=now,
+           meta={"date": day.local_date.isoformat(), "kind": shift.kind})
     db.commit()
     return True
 
@@ -438,6 +454,9 @@ def resolve_attention(db: Session, actor: Actor, attention_id: uuid.UUID, now: d
 
 # ---------------- publication ----------------
 
+BOARDING = "boarding"  # snapshot marker: scheduled on the boarding order, no ambulance
+
+
 def _snapshot(db: Session, version_id: uuid.UUID | None) -> tuple[dict, dict]:
     """(shift_id -> {user_id: slot_key}, shift_id -> {active slot_key: capacity})"""
     people: dict[uuid.UUID, dict[uuid.UUID, uuid.UUID]] = {}
@@ -451,7 +470,104 @@ def _snapshot(db: Session, version_id: uuid.UUID | None) -> tuple[dict, dict]:
             slots.setdefault(s.shift_id, {})[s.slot_key] = s.capacity
     for a in db.scalars(select(Assignment).where(Assignment.version_id == version_id)):
         people.setdefault(a.shift_id, {})[a.user_id] = key_of[a.slot_id]
+    # A trainee on the boarding order is scheduled even without an ambulance. Ambulance placement takes precedence.
+    for b in db.scalars(select(BoardingEntry).where(BoardingEntry.version_id == version_id, live_boarding(BoardingEntry))):
+        people.setdefault(b.shift_id, {}).setdefault(b.user_id, BOARDING)
     return people, slots
+
+
+def _add_baseline_slots(db: Session, version_id: uuid.UUID, shift: Shift) -> None:
+    for i in range(shift.baseline_slots):
+        db.add(AmbulanceSlot(version_id=version_id, shift_id=shift.id, ordinal=i + 1, capacity=DEFAULT_CAPACITY))
+
+
+def add_shift_type(db: Session, actor: Actor, day_id: uuid.UUID, kind: str, now: datetime,
+                   open_registration: bool = False) -> Shift:
+    """Adds an allowed shift type to a date (decision 2026-10-16). Allowed after registration opens, including
+    after publication. It never reopens registration or joining: after publication the new type is not
+    self-selectable and volunteers cannot request it. The Day Manager assigns people directly. Published rows
+    are untouched; the working copy gets the type's baseline ambulances. Volunteers of the date's home day are
+    notified."""
+    from app.days.service import allowed_shift_kinds, build_shift, template_for
+    from app.accounts.models import DayMembership
+    day = lock_day(db, day_id)
+    require_manage_day(actor, day)
+    if kind not in allowed_shift_kinds(day.kind):
+        raise bad_request("shift_not_allowed", "סוג המשמרת אינו מותר ליום זה")
+    if db.scalar(select(Shift.id).where(Shift.activity_day_id == day.id, Shift.kind == kind)) is not None:
+        raise conflict("shift_exists", "המשמרת הזו כבר קיימת ביום זה")
+    if open_registration and day.latest_published_version_id is not None:
+        raise conflict("schedule_published", "אחרי פרסום הסידור אי אפשר לפתוח הרשמה חדשה למשמרת")
+    shift = build_shift(day, template_for(day.kind, kind), open_registration)
+    if day.latest_published_version_id is not None:
+        shift.self_selectable = False  # publication closes joining; a new type must not open it
+    db.add(shift)
+    db.flush()
+    draft = current_draft(db, day.id)
+    if draft is not None:
+        _add_baseline_slots(db, draft.id, shift)
+    wd = local_weekday(day.local_date)
+    recipients = list(db.scalars(
+        select(User.id).join(DayMembership, DayMembership.user_id == User.id)
+        .where(DayMembership.weekday == wd, DayMembership.valid_to.is_(None), User.status == "active")))
+    enqueue(db, event_type="shift_type_added", recipients=recipients,
+            dedup_prefix=f"shift_added:{shift.id}",
+            payload={"date": day.local_date.isoformat(), "activity_day_id": str(day.id), "shift": kind}, now=now)
+    record(db, actor_id=actor.user_id, action="shift_type_add", object_type="shift", object_id=shift.id, now=now,
+           meta={"date": day.local_date.isoformat(), "kind": kind, "notified": len(recipients)})
+    db.commit()
+    return shift
+
+
+def set_slot_operator(db: Session, actor: Actor, slot_key: uuid.UUID, user_id: uuid.UUID | None,
+                      start: time | None, end: time | None, now: datetime) -> None:
+    """Records the volunteer who operates an additional ambulance (decision 2026-10-16). Start only means from
+    that time until the end of the shift; start and end give the explicit range. Local (Asia/Jerusalem) times.
+    user_id None clears the operator. Draft only."""
+    from app.core.timeutil import to_local
+    _, draft = _begin_edit(db, actor, _slot_day_id(db, slot_key), now)
+    slot = _draft_slot(db, draft, slot_key)
+    if user_id is None:
+        slot.operator_user_id, slot.operator_start, slot.operator_end = None, None, None
+    else:
+        _check_assignable_user(db, user_id)
+        if start is None:
+            raise bad_request("operator_start_required", "יש להזין שעת התחלה למפעיל/ה")
+        shift = _shift(db, slot.shift_id)
+        s_local, e_local = to_local(shift.starts_at).time(), to_local(shift.ends_at).time()
+        if not (s_local <= start < e_local):
+            raise bad_request("operator_outside_shift", "שעת ההתחלה חייבת להיות בתוך המשמרת")
+        if end is not None and not (start < end <= e_local):
+            raise bad_request("operator_bad_range", "שעת הסיום חייבת להיות אחרי ההתחלה ולא אחרי סיום המשמרת")
+        slot.operator_user_id, slot.operator_start, slot.operator_end = user_id, start, end
+    record(db, actor_id=actor.user_id, action="draft_slot_operator", object_type="schedule_version",
+           object_id=draft.id, now=now, meta={"slot_key": str(slot_key), "operator": str(user_id) if user_id else None})
+    db.commit()
+
+
+def set_boarding(db: Session, actor: Actor, day_id: uuid.UUID, entries: list[tuple[uuid.UUID, uuid.UUID]],
+                 now: datetime) -> None:
+    """Replaces the date's boarding order (סדר עלייה) in the working copy. entries are (user_id, shift_id) in
+    boarding order. Only trainees, only evening or reinforcement shifts of this date, no duplicates. Being on
+    the list is scheduled participation; it does not assign an ambulance."""
+    day, draft = _begin_edit(db, actor, day_id, now)
+    shifts = {s.id: s for s in day_shifts(db, day.id)}
+    seen: set[uuid.UUID] = set()
+    for user_id, shift_id in entries:
+        if shift_id not in shifts or shifts[shift_id].kind not in ("evening", "reinforcement"):
+            raise bad_request("boarding_shift", "סדר העלייה מיועד למשמרת ערב או תגבור של היום")
+        if user_id in seen:
+            raise bad_request("boarding_duplicate", "אותו חניך/ה מופיע פעמיים בסדר העלייה")
+        seen.add(user_id)
+        if _check_assignable_user(db, user_id) != "trainee":
+            raise bad_request("boarding_not_trainee", "בסדר העלייה ניתן לרשום חניכים בלבד")
+    db.execute(delete(BoardingEntry).where(BoardingEntry.version_id == draft.id))
+    db.flush()
+    for position, (user_id, shift_id) in enumerate(entries, start=1):
+        db.add(BoardingEntry(version_id=draft.id, shift_id=shift_id, user_id=user_id, position=position))
+    record(db, actor_id=actor.user_id, action="draft_boarding", object_type="schedule_version", object_id=draft.id,
+           now=now, meta={"count": len(entries)})
+    db.commit()
 
 
 def publish(db: Session, actor: Actor, day_id: uuid.UUID, draft_id: uuid.UUID, expected_edit_count: int,
@@ -470,6 +586,13 @@ def publish(db: Session, actor: Actor, day_id: uuid.UUID, draft_id: uuid.UUID, e
                        {"edit_count": version.edit_count})
     if day.latest_published_version_id is not None and version.edit_count == 0:
         raise conflict("nothing_to_publish", "אין שינויים לפרסום")
+    # Requests must be decided first: approve or reject every pending request (decisions do not assign anyone).
+    from app.registration.service import pending_request_count
+    pending = pending_request_count(db, day.id)
+    if pending:
+        raise conflict("pending_requests",
+                       f"לא ניתן לפרסם: יש {pending} בקשות להרשמה שממתינות להחלטה. יש לאשר או לדחות כל בקשה לפני הפרסום",
+                       {"pending": pending})
 
     # Re-validate hard invariants on the whole draft (defence in depth beyond per-edit checks).
     shifts = {s.id: s for s in day_shifts(db, day.id)}
@@ -515,28 +638,40 @@ _EVENT_FOR_CHANGE = {
 _PRIORITY = list(_EVENT_FOR_CHANGE)
 
 
+def _day_schedule_changed(shifts, new_people, old_people, new_slots, old_slots) -> bool:
+    """True if any shift of the date gained, lost or moved an assignment, or changed its ambulance slots."""
+    for shift_id in shifts:
+        new_map, old_map = new_people.get(shift_id, {}), old_people.get(shift_id, {})
+        if set(new_map) != set(old_map):
+            return True
+        if any(new_map[u] != old_map[u] for u in new_map):
+            return True
+        if set(new_slots.get(shift_id, {})) != set(old_slots.get(shift_id, {})):
+            return True
+    return False
+
+
 def _publication_notifications(db: Session, day: ActivityDay, shifts: dict, previous_id, version, now) -> int:
-    """Recipients of a publication (decision 2026-10-12, DESIGN_REVIEW §10.7):
-    for every affected shift, its assigned volunteers AND its waiting volunteers (the same derived
-    waiting list the manager board shows: pool - assigned in the new version). Removed people get
-    'unassigned'. Only called from publish(), so draft edits never notify. Deduplicated per person
-    per publication (dedup key = version + user), so a retried publish adds nothing and a later
-    publication notifies again."""
+    """Recipients of a publication (decision 2026-10-16, supersedes the 2026-10-12 'affected shift only' rule):
+    every volunteer assigned to the date's schedule in the new version, every volunteer waiting for that date
+    (the derived pool minus the assigned, the same list the manager board shows), and every volunteer removed
+    from it. Removed people get 'unassigned'. Only called from publish(), so draft edits never notify.
+    Deduplicated per person per publication (dedup key = version + user), so a retried publish adds nothing and
+    a later publication notifies again."""
     new_people, new_slots = _snapshot(db, version.id)
     old_people, old_slots = _snapshot(db, previous_id)
     pools = shift_pools(db, day, list(shifts.values()))
     first = previous_id is None
+
+    if not first and not _day_schedule_changed(shifts, new_people, old_people, new_slots, old_slots):
+        return 0  # a republication with no net change to the schedule notifies nobody
 
     changes: dict[uuid.UUID, list[tuple[str, str]]] = {}  # user -> [(shift kind, change)]
     for shift_id, shift in shifts.items():
         new_map, old_map = new_people.get(shift_id, {}), old_people.get(shift_id, {})
         added = set(new_map) - set(old_map)
         removed = set(old_map) - set(new_map)
-        moved = {u for u in set(new_map) & set(old_map) if new_map[u] != old_map[u]}
         new_slot_keys = set(new_slots.get(shift_id, {})) - set(old_slots.get(shift_id, {}))
-        slots_changed = set(new_slots.get(shift_id, {})) != set(old_slots.get(shift_id, {}))
-        if not first and not (added or removed or moved or slots_changed):
-            continue  # shift not affected by this publication
         waiting = set(pools.get(shift_id, {})) - set(new_map) - removed
         if first:
             waiting_change = "published_waiting"

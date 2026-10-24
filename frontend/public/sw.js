@@ -58,3 +58,38 @@ self.addEventListener("fetch", (event) => {
     })),
   );
 });
+
+// ---- Web Push (initial flow, 2026-10-17). Same worker as the offline shell above. ----
+// The push payload is generic and carries no personal data; a notification click opens a same-origin app path.
+function safeAppPath(path) {
+  return typeof path === "string" && /^\/(?!\/)[^\s\\]*$/.test(path) ? path : "/";
+}
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
+  const title = typeof data.title === "string" ? data.title.slice(0, 80) : "מד״א";
+  const body = typeof data.body === "string" ? data.body.slice(0, 200) : "";
+  const tag = typeof data.tag === "string" ? data.tag.slice(0, 40) : undefined;
+  event.waitUntil(self.registration.showNotification(title, {
+    body, tag, dir: "rtl", lang: "he",
+    icon: "/brand/mda-icon-192.png", badge: "/brand/mda-icon-192.png",
+    data: { url: safeAppPath(data.url) },
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = new URL(safeAppPath(event.notification.data && event.notification.data.url), self.location.origin).href;
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of windows) {
+      if (new URL(client.url).origin === self.location.origin) {
+        await client.focus();
+        try { await client.navigate(target); } catch (e) { /* keep the window as it is */ }
+        return;
+      }
+    }
+    return self.clients.openWindow(target);
+  })());
+});
