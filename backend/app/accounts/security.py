@@ -20,7 +20,7 @@ _hash_slots = threading.BoundedSemaphore(get_settings().password_hash_concurrenc
 # Pre-computed so unknown emails cost the same as wrong passwords (no user enumeration by timing).
 _DUMMY_HASH = _hasher.hash("timing-equaliser-not-a-password")
 
-MIN_PASSWORD_LENGTH = 10
+MIN_PASSWORD_LENGTH = 8
 
 
 def hash_password(password: str) -> str:

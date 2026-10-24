@@ -78,9 +78,9 @@ export function Signup() {
         <label className="field">מייל<input type="email" dir="ltr" value={form.email} onChange={set("email")} required /></label>
         <label className="field">טלפון<input type="tel" dir="ltr" value={form.phone} onChange={set("phone")} /></label>
         <label className="field">
-          סיסמה (לפחות 10 תווים)
+          סיסמה (לפחות 8 תווים)
           <input type="password" dir="ltr" autoComplete="new-password" value={form.password} onChange={set("password")}
-                 required minLength={10} />
+                 required minLength={8} />
         </label>
         <label className="field">
           יום התנדבות מבוקש
