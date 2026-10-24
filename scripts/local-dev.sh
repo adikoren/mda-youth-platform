@@ -22,6 +22,11 @@ case "${1:-start}" in
       "$PG_BIN/pg_ctl" -D "$DATA/pgdata" -l "$DATA/postgres.log" -w start
     fi
     (cd "$ROOT/backend" && "$PY/alembic" upgrade head >/dev/null)
+    # Admin from the environment: loads ~/mda-local-data/secrets.env (outside the repository) if present.
+    if [ -f "$DATA/secrets.env" ]; then set -a; . "$DATA/secrets.env"; set +a; fi
+    if [ -n "${MDA_ADMIN_EMAIL:-}" ] && [ -n "${MDA_ADMIN_PASSWORD:-}" ]; then
+      (cd "$ROOT/backend" && "$PY/python" -m app.cli bootstrap-admin)
+    fi
     (cd "$ROOT/backend" && nohup "$PY/uvicorn" app.main:app --port 8000 > "$DATA/api.log" 2>&1 &)
     (cd "$ROOT/frontend" && nohup npx vite --port 5173 --strictPort > "$DATA/web.log" 2>&1 &)
     echo "database: 127.0.0.1:5433 (data in $DATA/pgdata)"

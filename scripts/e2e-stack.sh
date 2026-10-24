@@ -42,7 +42,7 @@ case "${1:-up}" in
     (cd "$ROOT/backend" && MDA_DEMO_PASSWORD="$E2E_DATASET_PASSWORD" "$PY/python" -m app.cli seed-dataset >/dev/null)
     # Test admin from the environment (never in the repository): MDA_ADMIN_EMAIL and MDA_ADMIN_PASSWORD.
     if [ -n "${MDA_ADMIN_EMAIL:-}" ] && [ -n "${MDA_ADMIN_PASSWORD:-}" ]; then
-      (cd "$ROOT/backend" && "$PY/python" -m app.cli create-admin --email "$MDA_ADMIN_EMAIL" --name "Test Admin" >/dev/null)
+      (cd "$ROOT/backend" && MDA_ADMIN_NAME="Test Admin" "$PY/python" -m app.cli bootstrap-admin >/dev/null)
       echo "test admin ready: $MDA_ADMIN_EMAIL"
     fi
     (cd "$ROOT/backend" && nohup "$PY/uvicorn" app.main:app --port 8001 > "$DATA/e2e-api.log" 2>&1 & echo $! >> "$PIDS")

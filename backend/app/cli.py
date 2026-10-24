@@ -44,6 +44,37 @@ def _read_password() -> str:
     return pw
 
 
+def cmd_bootstrap_admin(_args) -> None:
+    """Admin account from the environment (never in the repository): MDA_ADMIN_EMAIL, MDA_ADMIN_PASSWORD and
+    optionally MDA_ADMIN_NAME. Creates the account, or sets its password if it exists. Idempotent."""
+    email_raw = os.environ.get("MDA_ADMIN_EMAIL", "").strip()
+    password = os.environ.get("MDA_ADMIN_PASSWORD", "")
+    if not email_raw or not password:
+        sys.exit("set MDA_ADMIN_EMAIL and MDA_ADMIN_PASSWORD in the environment")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        sys.exit(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+    email = normalize_email(email_raw)
+    name = os.environ.get("MDA_ADMIN_NAME", "Admin").strip() or "Admin"
+    now = get_clock().now()
+    with session_factory()() as db:
+        user = db.scalar(select(User).where(User.email == email))
+        if user is None:
+            user = User(email=email, full_name=name, password_hash=hash_password(password), status="active",
+                        created_at=now, approved_at=now)
+            db.add(user)
+            db.flush()
+            action = "created"
+        else:
+            user.password_hash = hash_password(password)
+            user.status = "active"
+            action = "updated"
+        accounts.set_authority_role(db, user.id, "admin", True, None, now)
+        record(db, actor_id=None, action="admin_bootstrap", object_type="user", object_id=user.id, now=now,
+               meta={"action": action})
+        db.commit()
+    print(f"admin {action}: {email}")
+
+
 def cmd_create_admin(args) -> None:
     now = get_clock().now()
     email = normalize_email(args.email)
@@ -193,6 +224,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init").set_defaults(fn=cmd_init)
+    sub.add_parser("bootstrap-admin", help="admin from MDA_ADMIN_EMAIL / MDA_ADMIN_PASSWORD (create or set password)").set_defaults(fn=cmd_bootstrap_admin)
     a = sub.add_parser("create-admin")
     a.add_argument("--email", required=True)
     a.add_argument("--name", required=True)
