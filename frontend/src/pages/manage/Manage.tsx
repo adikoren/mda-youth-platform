@@ -178,7 +178,8 @@ export function TraineesEntry() {
   const ordinary = (me?.managed_weekdays ?? []).filter((w) => w !== 6).sort((a, b) => a - b);
   if (!youthView && ordinary.length === 0) return <Navigate to="/manage" replace />;
   if (!youthView && ordinary.length === 1) return <TraineeList weekday={ordinary[0]} back="/manage" />;
-  const choices = youthView ? [0, 1, 2, 3, 4, 5, 6] : ordinary;
+  // Saturday has no trainees of its own: only the home days Sunday to Friday are offered.
+  const choices = youthView ? [0, 1, 2, 3, 4, 5] : ordinary;
   return (
     <Shell title="חניכים" back="/manage">
       <h2>בחירת יום</h2>
