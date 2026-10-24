@@ -89,10 +89,10 @@ def test_a_form_open_when_registration_closes_is_refused_and_the_stored_answer_s
     assert next(s for s in shifts["shifts"] if s["shift_id"] == sid)["available"] is True
 
 
-def test_day_manager_and_admin_keep_management_after_closing(world, clock):
+def test_day_manager_and_admin_get_no_late_exception_for_their_own_registration(world, clock):
     sid = evening(world)
     clock.set(local("2026-10-14", 12, 0, 0))
-    assert answer(Client("thu.mgr@x.test"), world, sid, True).status_code == 200  # the relevant Day Manager
-    assert answer(Client("admin@x.test"), world, sid, True).status_code == 200  # Admin
+    assert answer(Client("thu.mgr@x.test"), world, sid, True).status_code == 409  # requests only, like volunteers
+    assert answer(Client("admin@x.test"), world, sid, True).status_code == 409  # Admin: same rules
     # Another volunteer with no access to the day is not a manager.
     assert answer(Client("mon.vol@x.test"), world, sid, True).status_code == 404

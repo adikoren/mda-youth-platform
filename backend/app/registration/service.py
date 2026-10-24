@@ -8,7 +8,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.access.context import Actor
-from app.access.policies import can_register_for_day, can_see_open_registration, manages_day, require_manage_day
+from app.access.queries import published_schedule_visible
+from app.access.policies import can_register_for_day, can_see_open_registration, require_manage_day
 from app.audit.service import record
 from app.accounts.models import User
 from app.core.errors import bad_request, conflict, not_found
@@ -37,12 +38,28 @@ _SHIFT_CLOSED = {
 }
 
 
-def _refuse_if_shift_closed(shift: Shift, now: datetime, actor: Actor) -> None:
-    """Authorization override: Admin keeps direct management of registrations (DECISIONS D-53)."""
+def self_service_rights(day: ActivityDay, shift: Shift, now: datetime) -> dict:
+    """Volunteer self-service rules, decided in one place. Checked in this order: publication, shift start, window.
+
+    direct: may set availability now. request: may send a written late request now.
+    code/text: why the action is refused (the reason for the action that is not allowed).
+    Admin gets no exception here: these rules are about the volunteer's own registration."""
+    def deny(code: str, text: str, direct: bool = False, request: bool = False) -> dict:
+        return {"direct": direct, "request": request, "code": code, "text": text}
+
+    if day.latest_published_version_id is not None:
+        return deny("schedule_published", "הסידור כבר פורסם")
     state = shift_state(shift, now)
-    if state != "before" and not actor.is_admin:
-        code, text = _SHIFT_CLOSED[state]
-        raise conflict(code, text, {"state": state})
+    if state != "before":
+        return deny(*_SHIFT_CLOSED[state])
+    window = window_state(day, now)
+    if window == "open":  # direct answers are allowed; a written request is not needed (and refused)
+        return deny("registration_open", "ההרשמה עדיין פתוחה. אפשר לסמן זמינות ישירות", direct=True)
+    if window == "closed_late_allowed":
+        return deny("registration_closed", "ההרשמה נסגרה. לשינוי מאוחר יש לשלוח בקשה לאחראי", request=True)
+    if window == "not_open":
+        return deny("registration_not_open", "ההרשמה ליום זה עוד לא נפתחה")
+    return deny("day_ended", "התאריך כבר עבר")
 
 
 def window_state(day: ActivityDay, now: datetime) -> str:
@@ -64,6 +81,16 @@ def selectable_shifts(db: Session, day: ActivityDay) -> list[Shift]:
 def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> dict:
     if not can_see_open_registration(db, actor, day, now):
         raise not_found("day_not_found", "היום לא נמצא")
+    return registration_view(db, actor, day, now)
+
+
+def published_entry(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> dict:
+    """A published date the viewer may open in the schedule: shown on the home list as 'הסידור פורסם'.
+    No registration rights are implied; the schedule link is the only action (the caller checks visibility)."""
+    return registration_view(db, actor, day, now)
+
+
+def registration_view(db: Session, actor: Actor, day: ActivityDay, now: datetime) -> dict:
     reg = db.scalar(select(Registration).where(Registration.user_id == actor.user_id,
                                                Registration.activity_day_id == day.id))
     choices = {}
@@ -77,6 +104,10 @@ def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) 
             "shift_id": str(s.id), "kind": s.kind, "starts_at": s.starts_at, "ends_at": s.ends_at,
             "arrival_at": s.arrival_at, "allows_late_arrival": s.allows_late_arrival,
             "state": shift_state(s, now),
+            "direct": (rights := self_service_rights(day, s, now))["direct"],
+            "request": rights["request"],
+            "reason": None if rights["direct"] or rights["request"] else rights["code"],
+            "reason_text": None if rights["direct"] or rights["request"] else rights["text"],
             "available": None if c is None else c.available,
             "arrival_time": c.arrival_time.strftime("%H:%M") if c and c.arrival_time else None,
             "is_late": bool(c and c.is_late),
@@ -85,7 +116,11 @@ def my_registration(db: Session, actor: Actor, day: ActivityDay, now: datetime) 
     return {
         "activity_day_id": str(day.id), "date": day.local_date.isoformat(), "kind": day.kind,
         "weekday": local_weekday(day.local_date),
-        "window": window_state(day, now), "opens_at": day.registration_opens_at,
+        "window": window_state(day, now), "published": day.latest_published_version_id is not None,
+        # Same rule as GET /api/schedule/{day}: the page may link to the published schedule only when this is true.
+        "schedule_visible": db.scalar(select(ActivityDay.id).where(
+            ActivityDay.id == day.id, published_schedule_visible(actor, now))) is not None,
+        "opens_at": day.registration_opens_at,
         "closes_at": day.registration_closes_at, "revision": reg.revision if reg else 0, "shifts": shifts,
         "server_now": now,  # the clock the cutoffs were judged against (the UI uses it, not the phone's clock)
         # The volunteer's own written requests for this day, so the screen never offers a duplicate.
@@ -100,22 +135,17 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
                       expected_revision: int | None, now: datetime) -> dict:
     if not can_register_for_day(db, actor, day, now):
         raise not_found("day_not_found", "היום לא נמצא")
-    state = window_state(day, now)
-    if state == "not_open":
-        raise conflict("registration_not_open", "ההרשמה ליום זה עוד לא נפתחה")
-    if state == "ended":
-        raise conflict("day_ended", "התאריך כבר עבר")
+    # Serialise with publication: the publication check below sees the schedule as it is right now.
+    day = lock_day(db, day.id)
     shifts = {s.id: s for s in selectable_shifts(db, day)}
     parsed: dict[uuid.UUID, tuple[bool, time | None]] = {}
     for a in answers:
         shift = shifts.get(a["shift_id"])
         if shift is None:
             raise bad_request("shift_not_selectable", "אי אפשר להירשם בעצמך למשמרת זו")
-        _refuse_if_shift_closed(shift, now, actor)  # the shift's own start first: the more specific message
-        # After closing, direct changes are for management only (Admin, and the day's Day Manager). Volunteers
-        # use a written request to the Day Manager instead (DECISIONS D-56 / D-58). Server time decides.
-        if state == "closed_late_allowed" and not (actor.is_admin or manages_day(actor, day)):
-            raise conflict("registration_closed", "ההרשמה נסגרה. לשינוי מאוחר יש לשלוח בקשה לאחראי")
+        rights = self_service_rights(day, shift, now)
+        if not rights["direct"]:
+            raise conflict(rights["code"], rights["text"], {"state": shift_state(shift, now)})
         arrival = a.get("arrival_time")
         if arrival is not None and (not shift.allows_late_arrival or not a["available"]):
             raise bad_request("arrival_not_allowed", "בחירת שעת הגעה אפשרית רק במשמרת ערב ביום רגיל")
@@ -133,7 +163,6 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
 
     existing = {c.shift_id: c for c in db.scalars(select(RegistrationChoice).where(
         RegistrationChoice.registration_id == reg.id))}
-    late = state == "closed_late_allowed"
     changed: list[uuid.UUID] = []
     withdrawn: list[uuid.UUID] = []
     for shift_id, (available, arrival) in parsed.items():
@@ -142,28 +171,25 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
             continue  # idempotent retry / no-op: other shift choices are preserved untouched
         if c is None:
             c = RegistrationChoice(registration_id=reg.id, shift_id=shift_id, available=available,
-                                   arrival_time=arrival, is_late=late, first_answered_at=now, updated_at=now)
+                                   arrival_time=arrival, is_late=False, first_answered_at=now, updated_at=now)
             db.add(c)
         else:
             if c.available and c.cancelled_at is None and not available:
                 withdrawn.append(shift_id)
             # A new answer after a cancellation reopens the choice; the cancellation stays in the audit log.
-            c.available, c.arrival_time, c.is_late, c.updated_at = available, arrival, late, now
+            c.available, c.arrival_time, c.is_late, c.updated_at = available, arrival, False, now
             c.cancelled_at, c.cancelled_by_id = None, None
         changed.append(shift_id)
 
     if not changed:
         db.rollback()
-        return {"revision": reg.revision, "changed": False, "late": late}
+        return {"revision": reg.revision, "changed": False, "late": False}
 
     reg.revision += 1
     reg.updated_at, reg.updated_by_id = now, actor.user_id
     db.flush()
     payload = {"date": day.local_date.isoformat(), "activity_day_id": str(day.id), "user_id": str(actor.user_id)}
     managers = day_manager_ids(db, local_weekday(day.local_date))
-    if late:
-        enqueue(db, event_type="late_registration", recipients=managers,
-                dedup_prefix=f"late_reg:{reg.id}:{reg.revision}", payload=payload, now=now)
     _flag_withdrawals(db, actor, day, reg, withdrawn, managers, payload, now)
 
     # Answering a personal invitation counts as confirming it.
@@ -172,10 +198,10 @@ def save_registration(db: Session, actor: Actor, day: ActivityDay, answers: list
                                                    Invitation.kind == "invitation", Invitation.status == "pending")):
         inv.status, inv.responded_at = "confirmed", now
     record(db, actor_id=actor.user_id, action="registration_save", object_type="registration", object_id=reg.id,
-           now=now, meta={"late": late, "revision": reg.revision,
+           now=now, meta={"revision": reg.revision,
                           "choices": {shifts[s].kind: parsed[s][0] for s in changed}})
     db.commit()
-    return {"revision": reg.revision, "changed": True, "late": late}
+    return {"revision": reg.revision, "changed": True, "late": False}
 
 
 def _flag_withdrawals(db, actor, day, reg, withdrawn, managers, payload, now) -> None:
@@ -245,23 +271,14 @@ def submit_request(db: Session, actor: Actor, day: ActivityDay, request_id: uuid
             db.rollback()
             return existing, False
         raise conflict("request_id_conflict", "מזהה הבקשה כבר בשימוש")
-    if day.latest_published_version_id is not None:
-        raise conflict("schedule_published", "הסידור כבר פורסם. אי אפשר לשלוח בקשה להצטרפות")
-    state = window_state(day, now)
-    if state == "not_open":
-        raise conflict("registration_not_open", "ההרשמה ליום זה עוד לא נפתחה")
-    if state == "open":
-        raise conflict("registration_open", "ההרשמה עדיין פתוחה. אפשר לסמן זמינות ישירות")
-    if state == "ended":
-        raise conflict("day_ended", "התאריך כבר עבר")
     shift = db.get(Shift, shift_id)
     if shift is None or shift.activity_day_id != day.id:
         raise not_found("shift_not_found", "המשמרת לא נמצאה")
-    # Late requests are for shifts that have not started yet. Checked at submit time, so a form that
-    # was open when the shift started is refused.
-    if shift_state(shift, now) != "before":
-        code, text_he = _SHIFT_CLOSED[shift_state(shift, now)]
-        raise conflict(code, text_he, {"state": shift_state(shift, now)})
+    # Same rules as direct registration, checked again here so a form opened before publication or shift start
+    # is refused at submit time.
+    rights = self_service_rights(day, shift, now)
+    if not rights["request"]:
+        raise conflict(rights["code"], rights["text"], {"state": shift_state(shift, now)})
     text = (message or "").strip()
     if len(text) < 2:
         raise bad_request("request_empty", "יש לכתוב את הבקשה")

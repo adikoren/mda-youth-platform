@@ -25,23 +25,12 @@ def test_before_opening_is_blocked(world, clock):
     assert register(c, world.day("2026-10-22"), evening=True).status_code == 200
 
 
-def test_volunteers_cannot_change_answers_after_closing_but_the_day_manager_can(world, clock, db):
-    clock.set(at("2026-10-13", "18:00"))  # exactly at closing: closed for volunteers
-    c = Client("thu.youth@x.test")
-    r = register(c, world.day(THU), evening=True)
-    assert r.status_code == 409 and r.json()["code"] == "registration_closed"
+def test_volunteers_and_the_day_manager_cannot_change_answers_after_closing(world, clock, db):
+    clock.set(at("2026-10-13", "18:00"))  # exactly at closing: closed for everyone; requests only
+    for who in ("thu.youth@x.test", "thu.mgr@x.test"):
+        r = register(Client(who), world.day(THU), evening=True)
+        assert r.status_code == 409 and r.json()["code"] == "registration_closed", who
     assert db.query(OutboxMessage).filter_by(event_type="late_registration").count() == 0
-    # The day's Day Manager's late management change is still recorded and notifies the managers.
-    mgr = Client("thu.mgr@x.test")
-    r = register(mgr, world.day(THU), evening=True)
-    assert r.status_code == 200 and r.json()["late"] is True
-    msgs = list(db.scalars(select(OutboxMessage).where(OutboxMessage.event_type == "late_registration")))
-    assert {m.recipient_user_id for m in msgs} == {world.users["thu_mgr"].id}
-    register(mgr, world.day(THU), evening="17:00")
-    assert db.query(OutboxMessage).filter_by(event_type="late_registration").count() == 2
-    # Retrying the identical answer is a no-op: no third notification.
-    register(mgr, world.day(THU), evening="17:00")
-    assert db.query(OutboxMessage).filter_by(event_type="late_registration").count() == 2
 
 
 def test_saturday_open_to_everyone_with_independent_multi_select(world, clock):
@@ -83,7 +72,7 @@ def test_reinforcement_and_ordinary_morning_are_not_self_selectable(world, db):
     assert r.status_code == 400
 
 
-def test_withdrawal_after_publication_keeps_assignment_and_flags_attention(world, db):
+def test_withdrawal_after_publication_is_refused_and_the_assignment_stays(world, db):
     trainee = Client("thu.trainee@x.test")
     register(trainee, world.day(THU), evening=True)
     mgr = Client("thu.mgr@x.test")
@@ -92,17 +81,15 @@ def test_withdrawal_after_publication_keeps_assignment_and_flags_attention(world
     assert assign(mgr, ev["slots"][0]["slot_key"], world.uid("thu_trainee")).status_code == 201
     assert publish(mgr, world.day(THU)).status_code == 200
 
-    assert register(trainee, world.day(THU), evening=False).status_code == 200
+    r = register(trainee, world.day(THU), evening=False)  # after publication: refused, not silently applied
+    assert r.status_code == 409 and r.json()["code"] == "schedule_published"
     sched = trainee.get(f"/api/schedule/{world.day(THU)}").json()
     crew = [p["user_id"] for s in sched["shifts"] for sl in s["slots"] for p in sl["crew"]]
     assert world.uid("thu_trainee") in crew  # still assigned until a manager acts
     b = mgr.get(f"/api/manage/days/{world.day(THU)}/board").json()
-    assert b["attentions"][0]["label"] == "ביטל זמינות — נדרש טיפול"
-    assert db.query(OutboxMessage).filter_by(event_type="availability_withdrawn").count() == 1
-    # Persists until resolved by a manager (sending the notification does not clear it).
-    att_id = b["attentions"][0]["id"]
-    assert mgr.post(f"/api/manage/attentions/{att_id}/resolve").status_code == 200
-    assert db.scalar(select(AvailabilityAttention.status)) == "resolved"
+    # A refused change leaves no trace: no attention for the manager and no withdrawal notice.
+    assert not any(a["label"] == "ביטל זמינות — נדרש טיפול" for a in b["attentions"])
+    assert db.query(OutboxMessage).filter_by(event_type="availability_withdrawn").count() == 0
 
 
 def test_registration_list_visible_to_youth_manager_and_scope_only(world):

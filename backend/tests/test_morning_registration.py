@@ -52,7 +52,8 @@ def test_manager_opens_morning_explicitly_and_closing_preserves_answers(world, c
     assert [p["user_id"] for p in shift(b, "morning")["slots"][0]["crew"]] == [world.uid("thu_youth")]
     assert any(h["shift"] == "morning" for h in vol.get("/api/me/history").json())
     # Saving the visible shifts later does not touch the hidden morning answer.
-    assert register(vol, world.day(THU), evening=False).status_code == 200
+    r = register(vol, world.day(THU), evening=False)  # after publication: refused
+    assert r.status_code == 409 and r.json()["code"] == "schedule_published"
     board_after = board(mgr, world.day(THU))
     assert shift(board_after, "morning")["slots"][0]["crew"][0]["source"] in ("self", "both")
     actions = [a.action for a in db.scalars(select(AuditEvent).where(AuditEvent.action.like("morning_registration_%")))]

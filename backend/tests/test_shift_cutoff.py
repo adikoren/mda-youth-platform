@@ -106,7 +106,7 @@ def test_one_started_shift_does_not_close_another_on_the_same_day(world, clock):
     r = vol.put(f"/api/registrations/{world.day(SAT)}", {"choices": [{"shift_id": morning, "available": True}]})
     assert r.status_code == 409 and r.json()["code"] == "shift_started"
     r = vol.put(f"/api/registrations/{world.day(SAT)}", {"choices": [{"shift_id": evening, "available": True}]})
-    assert r.status_code == 200
+    assert r.status_code == 409 and r.json()["code"] == "registration_closed"  # closed window: request only
     r = vol.post(f"/api/registrations/{world.day(SAT)}/requests",
                  {"id": "00000000-0000-4000-8000-000000000001", "message": "בקשה למשמרת הערב", "shift_id": morning})
     assert r.status_code == 409 and r.json()["code"] == "shift_started"
@@ -136,8 +136,9 @@ def test_cutoff_uses_the_real_start_instant_across_the_dst_change(world, db, clo
 
 # ---------- Admin keeps management permissions ----------
 
-def test_admin_is_not_bound_by_the_volunteer_cutoff(world, clock):
+def test_admin_gets_the_volunteer_cutoff_for_their_own_registration(world, clock):
     admin = Client("admin@x.test")
     sid = evening_id(world)
     clock.set(local(THU, 15, 0, 1))
-    assert answer(admin, world, sid, True).status_code == 200  # direct management still works after the start
+    r = answer(admin, world, sid, True)  # Admin is not exempt for their own registration
+    assert r.status_code == 409 and r.json()["code"] == "shift_started"

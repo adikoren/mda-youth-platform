@@ -108,9 +108,9 @@ def mentor_home(actor: Actor = Depends(get_active_actor), db: Session = Depends(
 
 
 @router.get("/journal/trainees")
-def trainees(weekday: int | None = Query(None, ge=0, le=6), actor: Actor = Depends(get_active_actor),
-             db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
-    return service.manager_trainees(db, actor, now, weekday)
+def trainees(weekday: int | None = Query(None, ge=0, le=6), search: str | None = Query(None, max_length=100),
+             actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db), now: datetime = Depends(now_dep)):
+    return service.manager_trainees(db, actor, now, weekday, search)
 
 
 @router.get("/journal/trainees/{trainee_id}")

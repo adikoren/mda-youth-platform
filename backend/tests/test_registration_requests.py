@@ -85,7 +85,7 @@ def test_submit_is_refused_outside_the_closed_window(world, db, clock):
     assert r.status_code == 409 and r.json()["code"] == "registration_open"
     clock.set(at("2026-10-16", "09:00"))  # the date has ended
     _, r = submit(vol, world)
-    assert r.status_code == 409 and r.json()["code"] == "day_ended"
+    assert r.status_code == 409 and r.json()["code"] == "shift_ended"  # the shift ended first
     assert counts(db)[1] == 0
 
 
@@ -125,12 +125,12 @@ def test_only_the_day_managers_see_and_resolve_requests(world, db, clock):
     assert db.scalar(text(f"select status from registration_requests where id = '{rid}'")) == "approved"
 
 
-def test_admin_can_submit_and_still_manages_registration_directly(world, db, clock):
+def test_admin_can_submit_but_cannot_register_directly_after_closing(world, db, clock):
     clock.set(at(CLOSED, "12:00"))
     admin = Client("admin@x.test")  # eligible on any day, no invitation needed
     _, r = submit(admin, world)
     assert r.status_code == 201
-    assert register(admin, world.day(THU), evening=True).status_code == 200  # direct management still works
+    assert register(admin, world.day(THU), evening=True).status_code == 409  # Admin: same rules as volunteers
 
 
 def test_the_screen_shows_sent_requests_so_reloading_does_not_duplicate(world, db, clock):

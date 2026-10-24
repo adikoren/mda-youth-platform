@@ -127,6 +127,34 @@ def cmd_seed_demo(args) -> None:
     print(f"demo password (shown once, not stored anywhere): {password}")
 
 
+def cmd_seed_dataset(args) -> None:
+    """Adds synthetic volunteers, days, registrations and rides. Existing rows are never changed."""
+    from app.demo import dataset
+    now = get_clock().now()
+    password = os.environ.get("MDA_DEMO_PASSWORD") or secrets.token_urlsafe(9)
+    with session_factory()() as db:
+        counts = dataset.seed(db, now, password=password)
+        summary = dataset.report(db)
+        problems = dataset.publication_audit(db, now)
+    print("dataset added:", counts)
+    print("dataset totals (demo rows only):", summary)
+    if problems:
+        print("WARNING: published while registration is still open:", problems)
+    else:
+        print("publication audit: consistent (no published date with an open registration window)")
+    if counts["users"]:
+        print(f"demo volunteer password (new accounts only, shown once): {password}")
+        print("emails: demo.v001@example.test ... demo.v240@example.test (last six pending)")
+
+
+def cmd_clean_dataset(_args) -> None:
+    """Removes only rows recorded in the demo manifest, dependents first."""
+    from app.demo import dataset
+    with session_factory()() as db:
+        removed = dataset.clean(db)
+    print("removed:", removed)
+
+
 def cmd_report_capacity(_args) -> None:
     """Read-only: list ambulance slots whose capacity is above the current limit (3)."""
     from app.scheduling.service import MAX_CAPACITY, slots_over_capacity_limit
@@ -179,6 +207,8 @@ def main() -> None:
     s = sub.add_parser("seed-demo")
     s.add_argument("--days", type=int, default=21)
     s.set_defaults(fn=cmd_seed_demo)
+    sub.add_parser("seed-dataset", help="add synthetic volunteers, days, registrations and rides").set_defaults(fn=cmd_seed_dataset)
+    sub.add_parser("clean-dataset", help="remove only rows created by seed-dataset").set_defaults(fn=cmd_clean_dataset)
     sub.add_parser("report-capacity").set_defaults(fn=cmd_report_capacity)
     args = p.parse_args()
     args.fn(args)

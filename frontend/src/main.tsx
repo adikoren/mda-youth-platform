@@ -5,7 +5,7 @@ import { AuthProvider, isManager, useAuth } from "./auth";
 import { Login, Pending, Signup } from "./pages/Auth";
 import { History, Home, RegisterDay, ScheduleView } from "./pages/Volunteer";
 import { ScheduleDaysPage } from "./pages/ScheduleDays";
-import { BoardPage, ManageHub, TraineeDay, TraineesEntry } from "./pages/manage/Manage";
+import { BoardPage, ManageHub, SignupApprovals, TraineeDay, TraineesEntry } from "./pages/manage/Manage";
 import { ProfilePage } from "./pages/Profile";
 import { JournalPage, MentorHome, NotesPage, NotificationsHelp, OfflineHome } from "./pages/Journal";
 import { AdminAudit, AdminCalendar, AdminOutbox, AdminUsers, YouthManager } from "./pages/admin/Admin";
@@ -66,6 +66,7 @@ function App() {
       <Route path="/manage/appointments" element={<Guard need="youth"><YouthManager /></Guard>} />
       <Route path="/manage/trainees" element={<Guard need="staff"><TraineesEntry /></Guard>} />
       <Route path="/manage/trainees/day/:weekday" element={<Guard need="staff"><TraineeDayRoute /></Guard>} />
+      <Route path="/manage/signups" element={<Guard need="manager"><SignupApprovals /></Guard>} />
       <Route path="/manage/:dayId" element={<Guard need="manager"><BoardPage /></Guard>} />
       <Route path="/youth" element={<Navigate to="/manage" replace />} />
       <Route path="/youth/managers" element={<Navigate to="/manage" replace />} />

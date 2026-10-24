@@ -1,6 +1,6 @@
 // "אחראי נוער": the Youth Manager's area (decision of 2026-10-17). Weekday grid, a selected-day page, and the
 // selected day's volunteer list with role filters. Destinations are scoped to the selected day.
-import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { api, type Level } from "../api";
 import { useAuth } from "../auth";
 import { WEEKDAYS, fmtDateTime } from "../he";
@@ -38,12 +38,25 @@ export function YouthDayPage() {
   );
 }
 
+interface VolunteerEntry {
+  user_id: string;
+  full_name: string;
+  level: Level | null;
+  home_member: boolean;        // a volunteer of this home day as well
+  temporary_until?: string | null; // a temporary appointment that also covers this day (pinned manager)
+}
 interface DayVolunteers {
   weekday: number;
   weekday_name: string;
-  day_managers: { user_id: string; full_name: string; level: Level | null }[];
-  temporary_managers: { user_id: string; full_name: string; level: Level | null; ends: string }[];
-  volunteers: { user_id: string; full_name: string; level: Level | null }[];
+  day_managers: VolunteerEntry[];
+  temporary_managers: (VolunteerEntry & { ends: string })[];
+  volunteers: VolunteerEntry[];
+}
+
+// Each user ID once. The server already guarantees this; the page keeps the same rule so a repeated row can never render.
+function uniqueById<T extends { user_id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => (seen.has(r.user_id) ? false : (seen.add(r.user_id), true)));
 }
 
 // The selected day's volunteers. The day manager is pinned first and is never filtered out; the filter applies
@@ -55,6 +68,8 @@ export function YouthVolunteersPage() {
   const [params, setParams] = useSearchParams();
   // Filter changes replace the current entry: "חזרה" never steps back through earlier filters.
   const role = params.get("role") ?? "all";
+  const location = useLocation();
+  const here = location.pathname + location.search;
   const data = useLoad(() => api.get<DayVolunteers>(`/api/youth/days/${wd}/volunteers`), [wd]);
   const filter = FILTERS.find((f) => f.key === role) ?? FILTERS[0];
   const title = `${DAY_LABEL(wd)} · מתנדבים`;
@@ -72,20 +87,23 @@ export function YouthVolunteersPage() {
               )}
             </div>
             {data.data.day_managers.length === 0 && <span className="muted">לא הוגדר אחראי/ת יום ליום זה.</span>}
-            {data.data.day_managers.map((m) => (
+            {uniqueById(data.data.day_managers).map((m) => (
               <div key={m.user_id} className="person">
                 <Link className="name person-link" to={`/people/${m.user_id}`}>{m.full_name}</Link>
                 <LevelBadge level={m.level} />
                 <span className="badge">אחראי/ת יום</span>
+                {m.temporary_until && <span className="badge">אחראי/ת זמני/ת · עד {fmtDateTime(m.temporary_until)}</span>}
+                {m.home_member && <span className="badge">מתנדב/ת ביום הבית</span>}
               </div>
             ))}
-            {data.data.temporary_managers.length > 0 && (
+            {uniqueById(data.data.temporary_managers).length > 0 && (
               <div className="stack">
-                {data.data.temporary_managers.map((t) => (
+                {uniqueById(data.data.temporary_managers).map((t) => (
                   <div key={t.user_id} className="person">
                     <Link className="name person-link" to={`/people/${t.user_id}`}>{t.full_name}</Link>
                     <LevelBadge level={t.level} />
                     <span className="badge">אחראי/ת זמני/ת · עד {fmtDateTime(t.ends)}</span>
+                    {t.home_member && <span className="badge">מתנדב/ת ביום הבית</span>}
                   </div>
                 ))}
               </div>
@@ -102,15 +120,20 @@ export function YouthVolunteersPage() {
           </div>
 
           <section className="stack" aria-label="מתנדבים">
-            {data.data.volunteers
+            {uniqueById(data.data.volunteers)
               .filter((v) => filter.level === null || v.level === filter.level)
               .map((v) => (
                 <div key={v.user_id} className="person">
-                  <Link className="name person-link" to={`/people/${v.user_id}`}>{v.full_name}</Link>
+                  {v.level === "trainee" ? (
+                    // Trainees open the integrated trainee page; "חזרה" returns here with this filter.
+                    <Link className="name person-link" to={`/journal/${v.user_id}?from=${encodeURIComponent(here)}`}>{v.full_name}</Link>
+                  ) : (
+                    <Link className="name person-link" to={`/people/${v.user_id}`}>{v.full_name}</Link>
+                  )}
                   <LevelBadge level={v.level} />
                 </div>
               ))}
-            {data.data.volunteers.filter((v) => filter.level === null || v.level === filter.level).length === 0 && (
+            {uniqueById(data.data.volunteers).filter((v) => filter.level === null || v.level === filter.level).length === 0 && (
               <span className="muted">אין מתנדבים בסינון הזה.</span>
             )}
           </section>

@@ -304,3 +304,7 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .chip { min-height: 40px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; cursor: pointer; }
 .chip[aria-pressed="true"] { background: var(--red-600); border-color: var(--red-600); color: #fff; font-weight: 600; }
 .chip:focus-visible { outline: 3px solid var(--red-600); outline-offset: 2px; }
+
+/* Registration countdown: the clock is LTR text inside the Hebrew RTL sentence. */
+.countdown { color: var(--muted, inherit); font-weight: 600; }
+.countdown-clock { direction: ltr; unicode-bidi: isolate; display: inline-block; font-variant-numeric: tabular-nums; }

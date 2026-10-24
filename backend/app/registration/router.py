@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.access import queries
@@ -35,16 +35,22 @@ class RegistrationIn(BaseModel):
 def upcoming(days_ahead: int = 14, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db),
              now: datetime = Depends(now_dep)):
     """Dates the actor may answer, from today forward (eligibility via the shared SQL predicate).
-    Publication ends the registration entry: once a schedule is published, its assignments are read in
-    'סידור' instead (publication status decides, not the clock). Visibility of the schedule itself is
-    unchanged (app.access.queries.published_schedule_visible)."""
+    Publication ends the registration rights (publication status decides, not the clock). A published date stays
+    in this list only for viewers who may open its schedule (app.access.queries.published_schedule_visible), as
+    'הסידור פורסם' with a schedule link and no registration action."""
     today = local_today(now)
-    days = db.scalars(select(ActivityDay).where(queries.registerable_days(actor, now),
-                                                ActivityDay.latest_published_version_id.is_(None),
-                                                ActivityDay.local_date >= today,
-                                                ActivityDay.local_date <= today + timedelta(days=min(days_ahead, 60)))
-                      .order_by(ActivityDay.local_date))
-    return [service.my_registration(db, actor, d, now) for d in days]
+    horizon = today + timedelta(days=min(days_ahead, 60))
+    days = db.scalars(select(ActivityDay).where(
+        or_(
+            and_(queries.registerable_days(actor, now), ActivityDay.latest_published_version_id.is_(None)),
+            # Published dates the viewer may open in the schedule: shown as 'הסידור פורסם' with a schedule link.
+            and_(ActivityDay.latest_published_version_id.is_not(None), queries.published_schedule_visible(actor, now)),
+        ),
+        ActivityDay.local_date >= today,
+        ActivityDay.local_date <= horizon,
+    ).order_by(ActivityDay.local_date))
+    return [service.my_registration(db, actor, d, now) if d.latest_published_version_id is None
+            else service.published_entry(db, actor, d, now) for d in days]
 
 
 class RequestIn(BaseModel):

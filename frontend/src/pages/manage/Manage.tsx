@@ -3,12 +3,66 @@ import { Link, Navigate, useParams } from "react-router-dom";
 import { api, ApiError, type DaySummary, type Level, type ShiftKind } from "../../api";
 import { useAuth } from "../../auth";
 import { DAY_KIND, SHIFT, WEEKDAYS, WINDOW, dayTitle, fmtDateTime, fmtTime } from "../../he";
-import { LevelBadge, Loading, Shell, TimeRange, errorText } from "../../ui";
+import { LevelBadge, Loading, Shell, TimeRange, errorText, useLoad } from "../../ui";
 import { TraineeList } from "../Journal";
 
 // Ordered boarding list entry (סדר עלייה). Being on the list is scheduled participation.
 interface BoardingRow { position: number; shift: ShiftKind; shift_id: string; user_id: string; full_name: string;
   level: Level | null; is_guest: boolean; home_weekday_name?: string | null; ambulance: number | null }
+
+// Pending signups for the actor's managed weekdays (server-scoped). Level is chosen here; the home day is the
+// applicant's requested weekday, fixed by the server.
+interface PendingSignup { id: string; full_name: string; requested_weekday: number | null; requested_weekday_name: string | null; created_at: string }
+
+export function SignupApprovals() {
+  const list = useLoad(() => api.get<PendingSignup[]>("/api/manage/signups"));
+  const [levels, setLevels] = useState<Record<string, Level>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  async function approve(p: PendingSignup) {
+    setBusy(p.id); setErr(null); setDone(null);
+    try {
+      await api.post(`/api/manage/signups/${p.id}/approve`, { level: levels[p.id] ?? "youth" });
+      setDone(`${p.full_name} אושר/ה ושובץ/ה ליום ${p.requested_weekday_name ?? ""}`);
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setBusy(null);
+      list.reload();
+    }
+  }
+
+  return (
+    <Shell title="אישור משתמשים" back="/manage" backDirect>
+      <h2>בקשות הרשמה ממתינות</h2>
+      <span className="muted">מוצגות רק בקשות ליום שאתם מנהלים. אישור קובע את יום הבית ומפעיל את החשבון.</span>
+      {err && <div className="error" role="alert">{err}</div>}
+      {done && <div className="ok" role="status">{done}</div>}
+      {!list.data && <Loading error={list.error} />}
+      {list.data?.length === 0 && <div className="card muted">אין בקשות הרשמה ממתינות ליום שבאחריותכם.</div>}
+      {list.data?.map((p) => (
+        <section key={p.id} className="card stack">
+          <div className="row spread">
+            <strong>{p.full_name}</strong>
+            <span className="badge">יום מבוקש: {p.requested_weekday_name ?? "—"}</span>
+          </div>
+          <label className="field">
+            רמה
+            <select value={levels[p.id] ?? "youth"} disabled={busy === p.id}
+                    onChange={(e) => setLevels({ ...levels, [p.id]: e.target.value as Level })}>
+              <option value="youth">נוער</option>
+              <option value="trainee">חניך/ה</option>
+              <option value="mentor">חונך/ת</option>
+            </select>
+          </label>
+          <button className="btn primary" disabled={busy === p.id} onClick={() => approve(p)}>אישור</button>
+        </section>
+      ))}
+    </Shell>
+  );
+}
 
 // A 404 on a management screen means the day is no longer managed by this person (expired or revoked, or never
 // granted). Explain it in Hebrew instead of showing a generic error. No change was applied.
@@ -73,6 +127,10 @@ function DayManagerHub() {
       <Shell title="ניהול" back="/">
         <h2>בחירת יום לניהול</h2>
         <nav className="hub-grid" aria-label="בחירת יום">
+          <Link className="hub-card" to="/manage/signups">
+            <strong>אישור משתמשים</strong>
+            <span className="muted">בקשות הרשמה ליום שאתם מנהלים</span>
+          </Link>
           {days.map((wd) => (
             <button key={wd} type="button" className="hub-card" onClick={() => setPicked(wd)}>
               <strong>{DAY_NAME(wd)}</strong>
@@ -93,6 +151,10 @@ function DayManagerHub() {
         <button type="button" className="btn small ghost" onClick={() => setPicked(null)}>החלפת יום</button>
       )}
       <nav className="hub-grid" aria-label={label}>
+        <Link className="hub-card" to="/manage/signups">
+          <strong>אישור משתמשים</strong>
+          <span className="muted">בקשות הרשמה ל{label}</span>
+        </Link>
         <Link className="hub-card" to={`/schedule?weekday=${chosen}`}>
           <strong>ניהול משמרת</strong>
           <span className="muted">הסידורים של {label}</span>

@@ -109,35 +109,45 @@ def list_day_managers(actor: Actor = Depends(get_active_actor), db: Session = De
 
 @router.get("/youth/days/{weekday}/volunteers")
 def youth_day_volunteers(weekday: int, actor: Actor = Depends(get_active_actor), db: Session = Depends(get_db)):
-    """Volunteers whose home day is this weekday, with the day manager(s) pinned first (decision of 2026-10-17).
-    Youth Manager and Admin only. A missing day manager is reported as an empty list, never invented."""
+    """Volunteers whose home day is this weekday. Every user ID appears exactly once in the response:
+    a pinned Day Manager (permanent) is listed first, a temporary manager in its own section, and everyone else in
+    `volunteers`. Roles that apply to the same person are shown on that person's single entry (`temporary_until`,
+    `home_member`), never as a second row. Youth Manager and Admin only. A missing manager is an empty list."""
     if not (actor.is_admin or actor.is_youth_manager):
         raise not_found()
     if not 0 <= weekday <= 6:
         raise not_found()
     from app.scheduling.pool import people
-    manager_ids = accounts.day_managers_for(db, weekday)
-    member_ids = list(db.scalars(
+    from app.accounts.models import TemporaryDayManagerAppointment
+    from app.access.clock import get_clock
+
+    # Ordered and de-duplicated: one permanent manager per weekday, but never trust a repeated id.
+    manager_ids = list(dict.fromkeys(accounts.day_managers_for(db, weekday)))
+    member_ids = set(db.scalars(
         select(DayMembership.user_id).join(User, User.id == DayMembership.user_id)
         .where(DayMembership.weekday == weekday, DayMembership.valid_to.is_(None), User.status == "active")))
-    info = people(db, set(member_ids) | set(manager_ids))
-    managers = [{"user_id": str(uid), "full_name": info[uid].full_name, "level": info[uid].level}
-                for uid in manager_ids if uid in info]
-    volunteers = sorted(({"user_id": str(uid), "full_name": info[uid].full_name, "level": info[uid].level}
-                         for uid in member_ids if uid not in manager_ids and uid in info),
-                        key=lambda v: v["full_name"])
-    # Temporary managers valid right now (identified separately; the permanent manager stays first).
-    from app.accounts.models import TemporaryDayManagerAppointment
-    from app.accounts.temporary import status_of
-    from app.access.clock import get_clock
+    # Temporary managers valid right now; one entry per person (the latest end if rows ever overlapped).
     moment = get_clock().now()
-    temp_rows = list(db.scalars(select(TemporaryDayManagerAppointment).where(
-        TemporaryDayManagerAppointment.weekday == weekday, TemporaryDayManagerAppointment.revoked_at.is_(None),
-        TemporaryDayManagerAppointment.starts_at <= moment, TemporaryDayManagerAppointment.ends_at > moment)))
-    temp_info = people(db, {r.user_id for r in temp_rows}) if temp_rows else {}
-    temporary = [{"user_id": str(r.user_id), "full_name": temp_info[r.user_id].full_name,
-                  "level": temp_info[r.user_id].level, "ends": r.ends_at.isoformat()}
-                 for r in temp_rows if r.user_id in temp_info]
+    temp_ends: dict[uuid.UUID, datetime] = {}
+    for r in db.scalars(select(TemporaryDayManagerAppointment).where(
+            TemporaryDayManagerAppointment.weekday == weekday, TemporaryDayManagerAppointment.revoked_at.is_(None),
+            TemporaryDayManagerAppointment.starts_at <= moment, TemporaryDayManagerAppointment.ends_at > moment)):
+        temp_ends[r.user_id] = max(r.ends_at, temp_ends.get(r.user_id, r.ends_at))
+
+    info = people(db, member_ids | set(manager_ids) | set(temp_ends))
+    def entry(uid: uuid.UUID, **extra) -> dict:
+        return {"user_id": str(uid), "full_name": info[uid].full_name, "level": info[uid].level,
+                "home_member": uid in member_ids, **extra}
+
+    managers = [entry(uid, temporary_until=temp_ends[uid].isoformat() if uid in temp_ends else None)
+                for uid in manager_ids if uid in info]
+    manager_set = set(manager_ids)
+    temporary = [entry(uid, ends=temp_ends[uid].isoformat()) for uid in temp_ends
+                 if uid in info and uid not in manager_set]
+    temp_set = {t["user_id"] for t in temporary}
+    volunteers = sorted((entry(uid) for uid in member_ids
+                         if uid in info and uid not in manager_set and str(uid) not in temp_set),
+                        key=lambda v: v["full_name"])
     return {"weekday": weekday, "weekday_name": WEEKDAY_NAMES_HE[weekday], "day_managers": managers,
             "temporary_managers": temporary, "volunteers": volunteers}
 

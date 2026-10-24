@@ -164,7 +164,9 @@ def create_ride(db: Session, actor: Actor, ride_id: uuid.UUID, trainee_id: uuid.
     elif acc.can_mentor_shift(shift_id):
         if not acc.is_admin and not _published_assigned(db, trainee_id, shift, day):
             raise forbidden("not_assigned", "החניך לא שובץ במשמרת זו")
-        desc = None  # the case description is the trainee's part
+        # The case description is the trainee's part (a mentor's text is ignored, as before). Admin may write it,
+        # the same rule as update_description, so Admin's text is no longer dropped on create.
+        desc = _validate_description(description) if acc.can_edit_description else None
     elif acc.can_read_journal:
         raise forbidden("mentor_window_closed", WINDOW_CLOSED)
     else:
@@ -625,27 +627,33 @@ def notes_for_reader(db: Session, actor: Actor, trainee_id: uuid.UUID, now: date
     raise not_found()
 
 
-def manager_trainees(db: Session, actor: Actor, now: datetime, weekday: int | None = None) -> list[dict]:
+def manager_trainees(db: Session, actor: Actor, now: datetime, weekday: int | None = None,
+                     search: str | None = None) -> list[dict]:
     """Home-day trainees of the actor's managed weekdays (journal access) or, for admin/youth
     manager, all trainees (progress; journal only for admin). weekday limits the list to one home day.
+    search: free text, trimmed, case-insensitive, matches part of the name. One entry per user ID.
     Saturday managers have no trainee-management access (decision of 2026-10-17)."""
-    q = (select(User.id, User.full_name, DayMembership.weekday)
-         .join(VolunteerLevel, (VolunteerLevel.user_id == User.id) & VolunteerLevel.valid_to.is_(None)
-               & (VolunteerLevel.level == "trainee"))
-         .outerjoin(DayMembership, (DayMembership.user_id == User.id) & DayMembership.valid_to.is_(None))
-         .where(User.status == "active").order_by(User.full_name))
+    stmt = (select(User.id, User.full_name, DayMembership.weekday)
+            .join(VolunteerLevel, (VolunteerLevel.user_id == User.id) & VolunteerLevel.valid_to.is_(None)
+                  & (VolunteerLevel.level == "trainee"))
+            .outerjoin(DayMembership, (DayMembership.user_id == User.id) & DayMembership.valid_to.is_(None))
+            .where(User.status == "active").order_by(User.full_name))
     if not (actor.is_admin or actor.is_youth_manager):
         ordinary = sorted(w for w in actor.managed_weekdays if w != 6)
         if not ordinary:
             raise forbidden()
         if weekday is not None and weekday not in ordinary:
             raise not_found()
-        q = q.where(DayMembership.weekday.in_(ordinary))
+        stmt = stmt.where(DayMembership.weekday.in_(ordinary))
     if weekday is not None:
-        q = q.where(DayMembership.weekday == weekday)
-    rows = db.execute(q).all()
+        stmt = stmt.where(DayMembership.weekday == weekday)
+    text = " ".join((search or "").split())
+    if text:
+        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(User.full_name.ilike(f"%{escaped}%", escape="\\"))
+    rows = db.execute(stmt).all()
+    rows = list({uid: (uid, name, wd) for uid, name, wd in rows}.values())  # one entry per user ID
     prog = progress_for(db, [r[0] for r in rows])
     return [{"id": str(uid), "full_name": name, "home_weekday": wd, **prog[uid],
              "journal_access": actor.is_admin or (wd is not None and wd in actor.managed_weekdays)}
             for uid, name, wd in rows]
-

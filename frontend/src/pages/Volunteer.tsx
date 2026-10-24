@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, type DaySummary, type ShiftKind } from "../api";
 import { useAuth } from "../auth";
 import { DAY_KIND, SHIFT, WINDOW, dayTitle, fmtDateTime, fmtTime, phoneStatus } from "../he";
 import { LevelBadge, Loading, Shell, TimeRange, WhatsAppLink, errorText, useLoad } from "../ui";
 import { newRideId } from "../offline";
+import { countdownParts, dayLifecycle, shiftLifecycle, type Lifecycle } from "../lifecycle";
 import { NotificationNotice } from "./Journal";
 
 interface RegShift {
@@ -21,9 +22,16 @@ interface RegShift {
   is_late: boolean;
   // Server's view of the shift's own cutoff: before its start, started, or ended.
   state: "before" | "started" | "ended";
+  // Server's decision for this volunteer right now. The page only shows what the server allows.
+  direct: boolean; // may set availability now
+  request: boolean; // may send a written late request now
+  reason: string | null; // why neither is allowed: schedule_published, shift_started, shift_ended, ...
+  reason_text: string | null;
 }
 interface Reg {
   server_now: string;
+  published: boolean;
+  schedule_visible: boolean; // the viewer may open the published schedule (same rule as the schedule page)
   requests?: { id: string; status: string; created_at: string }[];
   activity_day_id: string;
   date: string;
@@ -48,24 +56,43 @@ interface NextAssignment {
 //   נדרשת פעולה  — red edge + label + one clear action button
 //   השיבוצים שלי — published assignments, solid white cards with an ambulance chip
 //   הרשמה        — dates with a status chip; outline cards
-type RegStatus = { tone: "todo" | "done" | "no" | "wait" | "late" | "plain"; label: string };
+// Counts down to the registration closing instant on the server's clock (the phone's clock only supplies the
+// ticks). At the deadline it asks the server again, so the direct controls disappear without a manual reload.
+function ClosingCountdown({ closesAt, serverNow, onExpire }: { closesAt: string; serverNow: string; onExpire: () => void }) {
+  const offset = useMemo(() => Date.parse(serverNow) - Date.now(), [serverNow]);
+  const closeMs = Date.parse(closesAt);
+  const [now, setNow] = useState(() => Date.now() + offset);
+  const fired = useRef(false);
+  useEffect(() => {
+    setNow(Date.now() + offset);
+    const t = setInterval(() => setNow(Date.now() + offset), 1000);
+    return () => clearInterval(t);
+  }, [offset]);
+  const remaining = closeMs - now;
+  useEffect(() => {
+    if (remaining <= 0 && !fired.current) {
+      fired.current = true;
+      onExpire();
+    }
+  }, [remaining <= 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (remaining <= 0) return <span className="status status-late">ההרשמה נסגרה</span>;
+  const p = countdownParts(remaining);
+  return (
+    <span className="countdown" role="timer" aria-live="off">
+      {p.clock ? (
+        <>
+          {p.text} <bdi dir="ltr" className="countdown-clock">{p.clock}</bdi> {p.unit}
+        </>
+      ) : (
+        p.text
+      )}
+    </span>
+  );
+}
 
-function regStatus(r: Reg, invited = false): RegStatus {
-  const live = r.shifts.filter((s) => !s.cancelled_at);
-  const yes = live.filter((s) => s.available).map((s) => SHIFT[s.kind]);
-  const answered = live.some((s) => s.available !== null);
-  if (r.window === "not_open") return { tone: "wait", label: "טרם נפתחה" };
-  if (yes.length) return { tone: "done", label: `נרשמת · ${yes.join(" + ")}` };
-  if (answered) return { tone: "no", label: "סימנת: לא מגיע/ה" };
-  if (r.shifts.some((s) => s.cancelled_at)) return { tone: "no", label: "בוטל" };
-  if (r.shifts.length && !r.shifts.some((s) => s.state === "before")) {
-    const allEnded = r.shifts.every((s) => s.state === "ended");
-    return { tone: "wait", label: allEnded ? "המשמרת הסתיימה" : "המשמרת כבר התחילה" };
-  }
-  if (invited) return { tone: "todo", label: "הוזמנת להירשם" };
-  if (r.window === "closed_late_allowed") return { tone: "late", label: "נסגרה" };
-  // Plain information only: not a status pill, not clickable.
-  return { tone: "plain", label: "עדיין לא נרשמת" };
+// Home list status for a date: the shared lifecycle decides, the page only passes the shift names.
+function regStatus(r: Reg, invited = false): Lifecycle {
+  return dayLifecycle(r, SHIFT, invited);
 }
 
 
@@ -177,13 +204,21 @@ export function Home() {
                   <span className="muted">{DAY_KIND[r.kind]}</span>
                 </span>
                 <span className="reg-end">
-                  {st.tone === "plain" ? <span className="muted">{st.label}</span> : <span className={`status status-${st.tone}`}>{st.label}</span>}
-                  {r.window === "open" && r.shifts.some((s) => s.state === "before") ? (
+                  {st.tone === "plain" ? (
+                    <ClosingCountdown closesAt={r.closes_at} serverNow={r.server_now} onExpire={() => regs.reload()} />
+                  ) : (
+                    <span className={`status status-${st.tone}`}>{st.label}</span>
+                  )}
+                  {r.published ? (
+                    r.schedule_visible && (
+                      <Link className="btn small" to={`/schedule/${r.activity_day_id}`} aria-label={`לצפייה בסידור ${label}`}>לצפייה בסידור</Link>
+                    )
+                  ) : r.shifts.some((s) => s.direct) ? (
                     <Link className="btn primary small" to={`/register/${r.activity_day_id}`} aria-label={`להרשמה למשמרת ${label}`}>
                       להרשמה למשמרת
                     </Link>
                   ) : (
-                    <Link className="btn small" to={`/register/${r.activity_day_id}`} aria-label={`לצפייה בסידור ${label}`}>לצפייה בסידור</Link>
+                    <Link className="btn small" to={`/register/${r.activity_day_id}`} aria-label={`לפרטים ${label}`}>לפרטים</Link>
                   )}
                 </span>
               </div>
@@ -227,7 +262,6 @@ const WINDOW_TONE: Record<string, string> = { open: "done", closed_late_allowed:
 
 export function RegisterDay() {
   const { dayId } = useParams();
-  const { me } = useAuth();
   const reg = useLoad(() => api.get<Reg>(`/api/registrations/${dayId}`), [dayId]);
   const [saved, setSaved] = useState<{ shift: string; late: boolean } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -297,6 +331,15 @@ export function RegisterDay() {
   }
 
   useEffect(() => {
+    // At the closing instant (server clock), ask the server again so direct controls go away without a reload.
+    const d = reg.data;
+    if (!d || d.window !== "open") return;
+    const wait = Date.parse(d.closes_at) - (Date.now() + (Date.parse(d.server_now) - Date.now()));
+    const t = setTimeout(() => reg.reload(), Math.max(0, wait) + 500);
+    return () => clearTimeout(t);
+  }, [reg.data]);
+
+  useEffect(() => {
     const ev = reg.data?.shifts.find((s) => s.allows_late_arrival);
     if (ev?.arrival_time) setLateOpen(true);
   }, [reg.data]);
@@ -321,32 +364,40 @@ export function RegisterDay() {
 
   if (!reg.data) return <Shell title="הרשמה" back="/"><Loading error={reg.error} /></Shell>;
   const r = reg.data;
-  // After closing, volunteers cannot change answers directly; they send a request instead.
-  // Admin keeps direct management of the registration (DECISIONS D-53).
-  const editable = r.window === "open" || (r.window === "closed_late_allowed" && !!me?.is_admin);
-  const isAdmin = !!me?.is_admin;
-  // A shift can be answered only before its own start (Admin keeps direct management).
-  const canAnswer = (s: RegShift) => editable && (s.state === "before" || isAdmin);
-  const requestShifts = r.shifts.filter((s) => s.state === "before");
+  // Same rules for everyone, Admin included: the server decides per shift (publication, start, window).
+  const canAnswer = (s: RegShift) => s.direct;
+  const requestShifts = r.shifts.filter((s) => s.request);
   return (
     <Shell title="הרשמה למשמרת" back="/">
       <section className="day-head">
         <span className="day-kind">{DAY_KIND[r.kind]}</span>
         <h2>{dayTitle(r)}</h2>
-        <span className={`status status-${WINDOW_TONE[r.window]}`}>{WINDOW[r.window]}</span>
-        <span className="muted">
-          {r.window === "not_open" ? `נפתחת ${fmtDateTime(r.opens_at)}` : `נסגרת ${fmtDateTime(r.closes_at)}`}
-        </span>
+        {r.published ? (
+          <span className="status status-wait">הסידור פורסם</span>
+        ) : (
+          <>
+            <span className={`status status-${WINDOW_TONE[r.window]}`}>{WINDOW[r.window]}</span>
+            <span className="muted">
+              {r.window === "not_open" ? `נפתחת ${fmtDateTime(r.opens_at)}` : `נסגרת ${fmtDateTime(r.closes_at)}`}
+            </span>
+          </>
+        )}
       </section>
-      {r.window === "closed_late_allowed" && requestShifts.length > 0 && (
+      {r.published && (
+        <section className="notice stack" style={{ gap: 6 }}>
+          <strong>הסידור פורסם</strong>
+          {r.schedule_visible && <Link className="btn small" to={`/schedule/${r.activity_day_id}`}>לצפייה בסידור</Link>}
+        </section>
+      )}
+      {!r.published && r.window === "closed_late_allowed" && requestShifts.length > 0 && (
         <div className="notice">ההרשמה נסגרה. לבקשה להרשמה באיחור, השתמשו בכפתור למטה.</div>
       )}
-      {r.window === "closed_late_allowed" && requestShifts.length === 0 && (
+      {!r.published && r.window === "closed_late_allowed" && requestShifts.length === 0 && (
         <div className="notice">ההרשמה נסגרה.</div>
       )}
       {r.window === "not_open" && <div className="notice">ההרשמה טרם נפתחה.</div>}
       {err && <div className="error" role="alert">{err}</div>}
-      {r.window === "closed_late_allowed" && requestShifts.length > 0 && (
+      {requestShifts.length > 0 && (
         <section className="request-box stack">
           {(r.requests?.length ?? 0) > 0 && (
             <div className="stack" style={{ gap: 2 }}>
@@ -403,7 +454,7 @@ export function RegisterDay() {
           <span className="muted">הגעה {fmtTime(s.arrival_at)}</span>
           {s.cancelled_at && <span className="status status-no">בוטל · {fmtDateTime(s.cancelled_at)}</span>}
           {!canAnswer(s) && (
-            <span className="status status-wait">{s.state === "ended" ? "המשמרת הסתיימה" : s.state === "started" ? "המשמרת כבר התחילה" : "ההרשמה נסגרה"}</span>
+            <span className={`status status-${shiftLifecycle(s, r).tone}`}>{shiftLifecycle(s, r).label}</span>
           )}
           {canAnswer(s) && (
           <div className="segmented" role="group" aria-label={`הרשמה למשמרת ${SHIFT[s.kind]}`}>
@@ -431,11 +482,10 @@ export function RegisterDay() {
                 </select>
               </label>
             ) : (
-              <button className="btn ghost small" disabled={!editable} onClick={() => setLateOpen(true)}>אגיע מאוחר יותר…</button>
+              <button className="btn ghost small" disabled={!canAnswer(s)} onClick={() => setLateOpen(true)}>אגיע מאוחר יותר…</button>
             )
           )}
           <div className="shift-foot">
-            {s.available === null && <span className="muted">עדיין לא נרשמת</span>}
             {s.is_late && <span className="status status-late">עודכן אחרי הסגירה</span>}
             {saved?.shift === s.shift_id && (
               <span className="saved" role="status">✓ נשמר{saved.late ? " · האחראי יקבל הודעה" : ""}</span>
@@ -443,7 +493,7 @@ export function RegisterDay() {
           </div>
         </section>
       ))}
-      <p className="muted center">הסימון נשמר מיד. סימון זמינות אינו שיבוץ — השיבוץ יופיע אחרי שהאחראי יפרסם את הסידור.</p>
+      {!r.published && <p className="muted center">הסימון נשמר מיד. סימון זמינות אינו שיבוץ — השיבוץ יופיע אחרי שהאחראי יפרסם את הסידור.</p>}
     </Shell>
   );
 }
@@ -499,7 +549,7 @@ export function ScheduleView() {
               {/* Unfilled trainee positions on a populated ambulance (boarding is assigned separately). */}
               {Array.from({ length: sl.empty_trainee_positions }, (_, i) => (
                 <div key={`empty-${i}`} className="person empty-position">
-                  <span className="muted">חניך/ה · פנוי</span>
+                  <span className="muted">חניך/ה</span>
                 </div>
               ))}
             </div>
@@ -509,7 +559,6 @@ export function ScheduleView() {
       {d.boarding.length > 0 && (
         <section className="card stack">
           <h3 className="section-title">סדר עלייה</h3>
-          <span className="muted">רשומים למשמרת גם בלי אמבולנס. אמבולנס יופיע כשישובצו.</span>
           <ol className="boarding-list">
             {d.boarding.map((b) => (
               <li key={b.user_id} className="person">
@@ -517,7 +566,7 @@ export function ScheduleView() {
                 <LevelBadge level={b.level} />
                 <span className="badge">משמרת {SHIFT[b.shift]}</span>
                 {b.is_guest && <span className="badge guest">אורח/ת{b.home_weekday_name ? ` · יום ${b.home_weekday_name}` : ""}</span>}
-                <span className="muted">{b.ambulance ? `אמבולנס ${b.ambulance}` : "ממתין/ה לשיבוץ לאמבולנס"}</span>
+                {b.ambulance && <span className="muted">אמבולנס {b.ambulance}</span>}
               </li>
             ))}
           </ol>

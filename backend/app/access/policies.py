@@ -31,6 +31,14 @@ def can_approve_signups(actor: Actor) -> bool:
     return actor.is_admin
 
 
+def can_approve_for_weekday(actor: Actor, weekday: int | None) -> bool:
+    """Signup approval scope: Admin any day; a Day Manager (permanent or active temporary appointment) only the
+    weekday they manage right now. Never grants a role, and a requested weekday grants no access by itself."""
+    if not actor.is_active or weekday is None:
+        return False
+    return actor.is_admin or weekday in actor.managed_weekdays
+
+
 def can_appoint_day_managers(actor: Actor) -> bool:
     return actor.is_admin or actor.is_youth_manager
 
