@@ -2,21 +2,33 @@
 
 Secrets live on the server in `/etc/mda/env` and on your Mac in `~/mda-local-data/` (outside Git). Never paste them into a chat or a commit.
 
-## 1. Email (Gmail API) — password reset
+## 1. Email — password reset
 
-The app sends reset emails through the Gmail API over HTTPS, as the dedicated Gmail account. SMTP is not used: the Droplet cannot reach Gmail's SMTP ports.
+Live reset emails use **Mailjet** (HTTPS API, free tier). The Gmail API route below stays available as an alternative. SMTP is not used: the Droplet cannot reach SMTP ports.
 
 Variables:
 
 | Name | Value |
 |---|---|
-| `MDA_EMAIL_MODE` | `gmail` for live use. `capture` for local development (writes files, sends nothing). `off` sends nothing. |
-| `MDA_GMAIL_CLIENT_ID` | OAuth client ID (Desktop app) from Google Cloud. |
+| `MDA_EMAIL_MODE` | `mailjet` for live use. `gmail` for the Gmail API route. `capture` for local development (writes files, sends nothing). `off` sends nothing. |
+| `MDA_MAILJET_API_KEY` | API key from Mailjet (Account settings → REST API → API key management). |
+| `MDA_MAILJET_API_SECRET` | The matching secret key. |
+| `MDA_GMAIL_CLIENT_ID` | OAuth client ID (Desktop app) from Google Cloud. Gmail route only. |
 | `MDA_GMAIL_CLIENT_SECRET` | OAuth client secret of the same client. |
 | `MDA_GMAIL_REFRESH_TOKEN` | Refresh token with the `gmail.send` scope, from the helper script below. |
 | `MDA_EMAIL_FROM_ADDRESS` | The dedicated Gmail address (the account that gave the refresh token). |
 | `MDA_EMAIL_FROM_NAME` | Defaults to `נוער מדא`. |
 | `MDA_PUBLIC_BASE_URL` | The public HTTPS address of the app, currently `https://188-166-161-195.sslip.io`. Reset links are built from this only. |
+
+### Mailjet setup (live route)
+
+1. In Mailjet, go to **Account settings → Sender addresses & domains** and confirm the sender `mda101youth@gmail.com` from the link Mailjet emails to it. Mailjet refuses messages from unconfirmed senders.
+2. Go to **Account settings → REST API → API key management**, copy the API key and secret key.
+3. On the server, put `MDA_EMAIL_MODE=mailjet`, `MDA_MAILJET_API_KEY`, `MDA_MAILJET_API_SECRET` and `MDA_EMAIL_FROM_ADDRESS=mda101youth@gmail.com` into `/etc/mda/env`, then run `systemctl restart mda-api`.
+
+Mailjet's answer "success" means it accepted the message, not that it reached the inbox.
+
+### Gmail API route (alternative)
 
 ### Steps in Google Cloud Console
 

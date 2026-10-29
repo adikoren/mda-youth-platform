@@ -46,7 +46,9 @@ class Settings(BaseSettings):
     # Email (password reset). "gmail" sends through the Gmail API over HTTPS, as the dedicated Gmail account, using
     # OAuth (gmail.send scope) and a refresh token. "capture" writes each message to a local folder for development;
     # it must never be used live. "off" sends nothing; requests are still answered neutrally.
-    email_mode: str = "off"
+    email_mode: str = "off"  # "mailjet" for live use, "gmail" (Gmail API), "capture" (local), "off"
+    mailjet_api_key: str = ""
+    mailjet_api_secret: str = ""
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
     gmail_refresh_token: str = ""

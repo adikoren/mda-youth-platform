@@ -3,6 +3,8 @@
 - gmail:   sends through the Gmail API over HTTPS, as the dedicated Gmail account, with OAuth (gmail.send scope)
            and a refresh token. Gmail answers "accepted" (queued); that is not proof of delivery, so the result is
            reported as accepted, never as delivered.
+- mailjet: sends through Mailjet's HTTPS API (send API v3.1) with an API key and secret. Mailjet answers "success"
+           when it accepts the message; that is not proof of delivery, so the result is reported as accepted.
 - capture: writes each message to MDA_EMAIL_CAPTURE_DIR as a JSON file. Local development only.
 - off:     sends nothing. Callers keep answering neutrally, and the failure is logged without any secret.
 
@@ -27,6 +29,7 @@ from app.core.config import get_settings
 log = logging.getLogger("mda.mailer")
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+MAILJET_URL = "https://api.mailjet.com/v3.1/send"
 
 # In-process access token, reused until shortly before it expires (Google issues them for one hour).
 _token_cache: dict = {"value": "", "expires_at": 0.0}
@@ -73,6 +76,13 @@ def _raw_message(s, to: str, subject: str, text: str, html: str) -> str:
     return base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
 
+def _mailjet_accepted(r) -> bool:
+    try:
+        return r.json()["Messages"][0]["Status"] == "success"
+    except (ValueError, KeyError, IndexError, TypeError):
+        return False
+
+
 def send(to: str, subject: str, text: str, html: str) -> SendResult:
     s = get_settings()
     if s.email_mode == "gmail":
@@ -91,6 +101,24 @@ def send(to: str, subject: str, text: str, html: str) -> SendResult:
         if r.status_code != 200:
             raise MailNotConfigured(f"gmail refused the message (HTTP {r.status_code})")
         return SendResult(mode="gmail", status="accepted")
+    if s.email_mode == "mailjet":
+        if not (s.mailjet_api_key and s.mailjet_api_secret and s.email_from_address):
+            raise MailNotConfigured("mailjet: MDA_MAILJET_API_KEY, MDA_MAILJET_API_SECRET or MDA_EMAIL_FROM_ADDRESS "
+                                    "is not set")
+        payload = {"Messages": [{
+            "From": {"Email": s.email_from_address, "Name": s.email_from_name},
+            "To": [{"Email": to}],
+            "Subject": subject,
+            "TextPart": text,
+            "HTMLPart": html,
+        }]}
+        try:
+            r = httpx.post(MAILJET_URL, json=payload, timeout=10, auth=(s.mailjet_api_key, s.mailjet_api_secret))
+        except httpx.HTTPError as exc:
+            raise MailNotConfigured(f"mailjet unreachable: {type(exc).__name__}") from None
+        if r.status_code != 200 or not _mailjet_accepted(r):
+            raise MailNotConfigured(f"mailjet refused the message (HTTP {r.status_code})")
+        return SendResult(mode="mailjet", status="accepted")
     if s.email_mode == "capture":
         folder = Path(s.email_capture_dir or Path.home() / "mda-local-data" / "outbox")
         folder.mkdir(parents=True, exist_ok=True)

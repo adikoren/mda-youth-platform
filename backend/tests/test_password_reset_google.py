@@ -438,3 +438,85 @@ def test_gmail_refusal_answers_neutrally(world, clock, gmail_on, monkeypatch, db
     fake_gmail(monkeypatch, gmail_on, send_status=403)
     assert forgot("thu.youth@x.test").json() == {"message": reset.NEUTRAL_MESSAGE}
     assert db.query(PasswordReset).count() == 0
+
+
+# ---------- Mailjet: accepted is not delivered; refusals and outages stay safe ----------
+
+MAILJET_KEY = "not-a-real-mailjet-key"
+MAILJET_SECRET = "not-a-real-mailjet-secret"
+
+
+@pytest.fixture
+def mailjet_on(monkeypatch):
+    from app.accounts import mailer
+    s = get_settings()
+    monkeypatch.setattr(s, "email_mode", "mailjet")
+    monkeypatch.setattr(s, "mailjet_api_key", MAILJET_KEY)
+    monkeypatch.setattr(s, "mailjet_api_secret", MAILJET_SECRET)
+    monkeypatch.setattr(s, "email_from_address", "mda101youth@gmail.com")
+    return mailer
+
+
+def fake_mailjet(monkeypatch, mailer, status=200, message_status="success"):
+    seen = []
+
+    class Resp:
+        status_code = status
+
+        def json(self):
+            return {"Messages": [{"Status": message_status}]}
+
+    def post(url, **kw):
+        seen.append((url, kw))
+        return Resp()
+
+    monkeypatch.setattr(mailer.httpx, "post", post)
+    return seen
+
+
+def test_mailjet_accepted_is_reported_as_accepted_not_delivered(world, clock, mailjet_on, monkeypatch, db):
+    seen = fake_mailjet(monkeypatch, mailjet_on)
+    result = mailjet_on.send(to="thu.youth@x.test", subject="איפוס סיסמה", text="קישור", html="<p>קישור</p>")
+    assert result.mode == "mailjet" and result.status == "accepted"  # queued by Mailjet, not delivered
+    url, kw = seen[0]
+    assert url == mailjet_on.MAILJET_URL
+    assert kw["auth"] == (MAILJET_KEY, MAILJET_SECRET)
+    message = kw["json"]["Messages"][0]
+    assert message["From"] == {"Email": "mda101youth@gmail.com", "Name": "נוער מדא"}
+    assert message["To"] == [{"Email": "thu.youth@x.test"}]
+    assert message["Subject"] == "איפוס סיסמה"
+    assert message["TextPart"] == "קישור" and message["HTMLPart"] == "<p>קישור</p>"
+
+
+def test_mailjet_refusal_is_safe_and_does_not_leak_the_secret(world, clock, mailjet_on, monkeypatch):
+    fake_mailjet(monkeypatch, mailjet_on, status=401, message_status="error")
+    with pytest.raises(mailjet_on.MailNotConfigured) as exc:
+        mailjet_on.send(to="a@x.test", subject="s", text="t", html="h")
+    assert "HTTP 401" in str(exc.value)
+    assert MAILJET_KEY not in str(exc.value) and MAILJET_SECRET not in str(exc.value)
+
+
+def test_mailjet_error_status_inside_a_200_is_a_refusal(world, clock, mailjet_on, monkeypatch):
+    fake_mailjet(monkeypatch, mailjet_on, status=200, message_status="error")
+    with pytest.raises(mailjet_on.MailNotConfigured):
+        mailjet_on.send(to="a@x.test", subject="s", text="t", html="h")
+
+
+def test_mailjet_missing_configuration_is_refused_before_any_call(world, clock, mailjet_on, monkeypatch):
+    seen = fake_mailjet(monkeypatch, mailjet_on)
+    monkeypatch.setattr(get_settings(), "mailjet_api_secret", "")
+    with pytest.raises(mailjet_on.MailNotConfigured):
+        mailjet_on.send(to="a@x.test", subject="s", text="t", html="h")
+    assert seen == []
+
+
+def test_mailjet_outage_answers_neutrally_and_leaves_no_usable_link(world, clock, mailjet_on, monkeypatch, db):
+    import httpx
+    clock.set(at("2026-10-12", "21:00"))
+
+    def down(url, **kw):
+        raise httpx.ConnectError("unreachable")
+    monkeypatch.setattr(mailjet_on.httpx, "post", down)
+    r = forgot("thu.youth@x.test")
+    assert r.status_code == 200 and r.json() == {"message": reset.NEUTRAL_MESSAGE}
+    assert db.query(PasswordReset).count() == 0
