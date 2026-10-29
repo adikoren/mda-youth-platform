@@ -15,6 +15,10 @@ export MDA_TEST_DATABASE_URL="postgresql+psycopg://mda@127.0.0.1:5433/mda_test"
 export MDA_VAPID_PRIVATE_KEY_PATH="$DATA/vapid_private.pem"
 export MDA_VAPID_PUBLIC_KEY="$(cat "$DATA/vapid_public.txt" 2>/dev/null || true)"
 export MDA_VAPID_SUBJECT="${MDA_VAPID_SUBJECT:-mailto:admin@example.com}"
+# Email for local development: capture to a folder (nothing is sent). Never use "capture" on a live server.
+export MDA_EMAIL_MODE="${MDA_EMAIL_MODE:-capture}"
+export MDA_EMAIL_CAPTURE_DIR="${MDA_EMAIL_CAPTURE_DIR:-$DATA/outbox}"
+export MDA_PUBLIC_BASE_URL="${MDA_PUBLIC_BASE_URL:-http://localhost:5173}"
 
 case "${1:-start}" in
   start)

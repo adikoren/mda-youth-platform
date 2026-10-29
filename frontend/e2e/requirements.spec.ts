@@ -1,7 +1,7 @@
 // Product requirements §12 (acceptance scenarios) that need several people or a changing clock. Each scenario uses
 // its own Thursday so they do not interfere. Time-dependent state is set on the disposable e2e database (db.ts).
 import { expect, test, type Page } from "@playwright/test";
-import { setWindow, firstTraineeEmailOnWeekday, sql, traineeIdByEmail } from "./db";
+import { setWindow, firstTraineeEmailOnWeekday, sql, thursdayWithRegistrations, traineeIdByEmail } from "./db";
 import { ACCOUNTS, login, openDayBoard } from "./helpers";
 
 // These scenarios change shared state (invitations, windows, drafts), so they run once, on the phone project.
@@ -13,7 +13,8 @@ const INVITEE = "שירה כהן";            // unique name of demo.v007 (home 
 const INVITEE_ACCOUNT = ACCOUNTS.monVolunteer;
 const DAY_GUEST = { date: "2026-11-05", text: /5\.11\.26/ };   // invitation, confirmation, guest access
 const DAY_LATE = { date: "2026-11-12", text: /12\.11\.26/ };   // late request from another day
-const DAY_CREW = { date: "2026-11-19", text: /19\.11\.26/ };   // ambulance cancel returns crew to waiting
+// ambulance cancel returns crew to waiting: a Thursday that has registrants (chosen at run time)
+const DAY_CREW = { date: thursdayWithRegistrations(["2026-11-05", "2026-11-12"]), text: /./ };
 
 async function invite(page: Page, name: string) {
   await page.getByPlaceholder(/חיפוש מתנדב/).fill(name);
