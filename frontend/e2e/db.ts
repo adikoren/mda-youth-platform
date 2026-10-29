@@ -29,3 +29,15 @@ export function traineeIdByEmail(email: string): string {
 export function dayIdByDate(localDate: string): string {
   return sql(`select id from activity_days where local_date = '${localDate}'`);
 }
+
+// The first future Thursday with registrations that is not one of the dates other scenarios use. The dataset's
+// date window moves with the calendar, so a fixed date can end up without registrants.
+export function thursdayWithRegistrations(excluded: string[]): string {
+  const ex = excluded.map((d) => `'${d}'`).join(",");
+  const date = sql(`select d.local_date from activity_days d join registrations r on r.activity_day_id = d.id
+                     where extract(dow from d.local_date) = 4 and d.local_date > current_date
+                       and d.local_date not in (${ex})
+                     group by d.local_date order by d.local_date limit 1`);
+  if (!date) throw new Error("no Thursday with registrations in the e2e database");
+  return date;
+}

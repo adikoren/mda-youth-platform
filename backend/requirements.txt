@@ -9,3 +9,6 @@ argon2-cffi==25.1.0
 pydantic-settings==2.15.0
 email-validator==2.3.0
 pywebpush==2.4.0
+google-auth==2.41.1
+requests==2.32.3
+httpx==0.28.1
