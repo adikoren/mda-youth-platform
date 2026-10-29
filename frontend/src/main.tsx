@@ -2,11 +2,12 @@ import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AuthProvider, isManager, useAuth } from "./auth";
-import { Login, Pending, Signup } from "./pages/Auth";
+import { ForgotPassword, Login, Pending, ResetPassword, Signup } from "./pages/Auth";
 import { History, Home, RegisterDay, ScheduleView } from "./pages/Volunteer";
 import { ScheduleDaysPage } from "./pages/ScheduleDays";
 import { BoardPage, ManageHub, SignupApprovals, TraineeDay, TraineesEntry } from "./pages/manage/Manage";
 import { ProfilePage } from "./pages/Profile";
+import { AccountPage } from "./pages/AccountPage";
 import { JournalPage, MentorHome, NotesPage, NotificationsHelp, OfflineHome } from "./pages/Journal";
 import { AdminAudit, AdminCalendar, AdminOutbox, AdminUsers, YouthManager } from "./pages/admin/Admin";
 
@@ -48,6 +49,8 @@ function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/forgot" element={<ForgotPassword />} />
+      <Route path="/reset" element={<ResetPassword />} />
       <Route path="/pending" element={<Pending />} />
       <Route path="/" element={<Guard><Home /></Guard>} />
       <Route path="/register/:dayId" element={<Guard><RegisterDay /></Guard>} />
@@ -60,6 +63,7 @@ function App() {
       <Route path="/notes" element={<Guard><NotesPage /></Guard>} />
       <Route path="/notifications" element={<Guard><NotificationsHelp /></Guard>} />
       <Route path="/people/:userId" element={<Guard><ProfilePage /></Guard>} />
+      <Route path="/profile" element={<Guard><AccountPage /></Guard>} />
       <Route path="/manage" element={<Guard need="staff"><ManageHub /></Guard>} />
       <Route path="/manage/day/:weekday" element={<Guard need="youth"><YouthDayPage /></Guard>} />
       <Route path="/manage/day/:weekday/volunteers" element={<Guard need="youth"><YouthVolunteersPage /></Guard>} />

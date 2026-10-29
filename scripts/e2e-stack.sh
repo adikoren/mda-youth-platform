@@ -40,7 +40,14 @@ case "${1:-up}" in
     (cd "$ROOT/backend" && "$PY/alembic" upgrade head >/dev/null)
     (cd "$ROOT/backend" && MDA_DEMO_PASSWORD="$E2E_PASSWORD" "$PY/python" -m app.cli seed-demo --days 21 >/dev/null)
     (cd "$ROOT/backend" && MDA_DEMO_PASSWORD="$E2E_DATASET_PASSWORD" "$PY/python" -m app.cli seed-dataset >/dev/null)
-    (cd "$ROOT/backend" && nohup "$PY/uvicorn" app.main:app --port 8001 > "$DATA/e2e-api.log" 2>&1 & echo $! >> "$PIDS")
+    # Test admin from the environment (never in the repository): MDA_ADMIN_EMAIL and MDA_ADMIN_PASSWORD.
+    if [ -n "${MDA_ADMIN_EMAIL:-}" ] && [ -n "${MDA_ADMIN_PASSWORD:-}" ]; then
+      (cd "$ROOT/backend" && MDA_ADMIN_NAME="Test Admin" "$PY/python" -m app.cli bootstrap-admin >/dev/null)
+      echo "test admin ready: $MDA_ADMIN_EMAIL"
+    fi
+    # Test email is captured to a folder (never sent). The reset link points at the e2e web address.
+    (cd "$ROOT/backend" && MDA_EMAIL_MODE=capture MDA_EMAIL_CAPTURE_DIR="$DATA/e2e-outbox" MDA_PUBLIC_BASE_URL="http://localhost:5174" \
+      nohup "$PY/uvicorn" app.main:app --port 8001 > "$DATA/e2e-api.log" 2>&1 & echo $! >> "$PIDS")
     (cd "$ROOT/frontend" && MDA_API_URL="http://127.0.0.1:8001" nohup npx vite --port 5174 --strictPort > "$DATA/e2e-web.log" 2>&1 & echo $! >> "$PIDS")
     echo "e2e stack: database $DB, api http://127.0.0.1:8001, web http://localhost:5174"
     ;;

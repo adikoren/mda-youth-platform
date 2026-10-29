@@ -132,3 +132,44 @@ class TemporaryDayManagerAppointment(Base):
     updated_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     revoked_at: Mapped[datetime | None] = tstz(nullable=True)
     revoked_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class PasswordReset(Base):
+    """A single-use password-reset token. Only its SHA-256 hash is stored; the token itself is sent by email."""
+
+    __tablename__ = "password_resets"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = tstz()
+    expires_at: Mapped[datetime] = tstz()
+    used_at: Mapped[datetime | None] = tstz(nullable=True)
+
+
+class ExternalIdentity(Base):
+    """A linked sign-in provider identity. Keyed by the provider's stable subject id, never by email."""
+
+    __tablename__ = "external_identities"
+    __table_args__ = (Index("uq_external_identity", "provider", "subject", unique=True),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    provider: Mapped[str] = mapped_column(String(16))
+    subject: Mapped[str] = mapped_column(String(255))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = tstz()
+
+
+class OAuthState(Base):
+    """One sign-in attempt: state and nonce are stored hashed and are single-use (CSRF and replay protection)."""
+
+    __tablename__ = "oauth_states"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    nonce_hash: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(16))  # "login" or "link"
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = tstz()
+    expires_at: Mapped[datetime] = tstz()
+    used_at: Mapped[datetime | None] = tstz(nullable=True)

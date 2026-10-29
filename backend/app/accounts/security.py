@@ -20,7 +20,7 @@ _hash_slots = threading.BoundedSemaphore(get_settings().password_hash_concurrenc
 # Pre-computed so unknown emails cost the same as wrong passwords (no user enumeration by timing).
 _DUMMY_HASH = _hasher.hash("timing-equaliser-not-a-password")
 
-MIN_PASSWORD_LENGTH = 10
+MIN_PASSWORD_LENGTH = 8
 
 
 def hash_password(password: str) -> str:
@@ -79,3 +79,33 @@ class LoginRateLimiter:
 
 
 rate_limiter = LoginRateLimiter()
+
+
+class KeyedLimiter:
+    """Sliding window of attempts per key (e.g. an IP or an account identifier). Used for password-reset requests.
+    Counts requests, not outcomes, so an unknown address costs the same as a known one."""
+
+    def __init__(self, limit: int, window_seconds: int) -> None:
+        self._limit = limit
+        self._window = window_seconds
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        with self._lock:
+            q = self._hits[key]
+            now = time.monotonic()
+            while q and now - q[0] > self._window:
+                q.popleft()
+            if len(q) >= self._limit:
+                return False
+            q.append(now)
+            return True
+
+    def clear(self) -> None:
+        with self._lock:
+            self._hits.clear()
+
+
+reset_ip_limiter = KeyedLimiter(limit=10, window_seconds=3600)
+reset_email_limiter = KeyedLimiter(limit=5, window_seconds=3600)
